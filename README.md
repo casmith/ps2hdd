@@ -78,7 +78,7 @@ go build -o ps2hdd ./cmd/ps2hdd
 sudo install -m 0755 ps2hdd /usr/local/bin/ps2hdd
 ```
 
-Go 1.24 or later.
+Go 1.25 or later, as declared in `go.mod`.
 
 ## First run
 
