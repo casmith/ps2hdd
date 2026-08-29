@@ -1,0 +1,9 @@
+# Build output
+/ps2hdd
+/ps2hdd-linux-*
+/dist/
+
+# Local scratch
+*.img
+*.vcd
+*.partial

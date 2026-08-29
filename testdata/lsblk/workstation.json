@@ -1,0 +1,21 @@
+{
+   "blockdevices": [
+      {
+         "name": "sda", "path": "/dev/sda", "type": "disk", "size": 512110190592,
+         "model": "Samsung SSD 860 EVO 500GB", "serial": "S3Z2NB0K123456A",
+         "tran": "sata", "ro": false, "mountpoint": null, "pkname": null,
+         "children": [
+            {"name":"sda1","path":"/dev/sda1","type":"part","size":536870912,"model":null,"serial":null,"tran":null,"ro":false,"mountpoint":"/boot","pkname":"sda"},
+            {"name":"sda2","path":"/dev/sda2","type":"part","size":511571623936,"model":null,"serial":null,"tran":null,"ro":false,"mountpoint":"/","pkname":"sda"}
+         ]
+      },{
+         "name": "sdb", "path": "/dev/sdb", "type": "disk", "size": 120034123776,
+         "model": "WDC WD1200JB-00REA0", "serial": "WD-WCANM1234567",
+         "tran": "sata", "ro": false, "mountpoint": null, "pkname": null
+      },{
+         "name": "sr0", "path": "/dev/sr0", "type": "rom", "size": 1073741312,
+         "model": "DVD-RW DVR-212D", "serial": null, "tran": "sata", "ro": true,
+         "mountpoint": null, "pkname": null
+      }
+   ]
+}

@@ -1,0 +1,5 @@
+hdl_dump-2.4.1 by The W1zard 0f 0z
+
+type     size flags       dma startup      name
+DVD 3538944KB   0         *u4 SLUS_210.50  Burnout 3: Takedown
+total 114432MB, used 3584MB, available 110848MB

@@ -1,0 +1,12 @@
+{
+   "blockdevices": [
+      {
+         "name": "nvme0n1", "path": "/dev/nvme0n1", "type": "disk", "size": "1000204886016",
+         "model": "WD_BLACK SN770 1TB", "serial": "22354M800123",
+         "tran": "nvme", "ro": "0", "mountpoint": null,
+         "children": [
+            {"name":"nvme0n1p1","path":"/dev/nvme0n1p1","type":"part","size":"1073741824","ro":"0","mountpoint":"/boot/efi"}
+         ]
+      }
+   ]
+}

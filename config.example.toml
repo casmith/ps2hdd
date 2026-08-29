@@ -1,0 +1,122 @@
+# ps2hdd configuration
+#
+# Copy to ~/.config/ps2hdd/config.toml and edit, or let ps2hdd write it for you:
+#
+#   ps2hdd detect --configure
+#   ps2hdd config set sources.ps2 /mnt/nas/games/ps2
+#
+# Everything here is also editable from the Settings view in the interface.
+
+# The PlayStation 2 HDD.
+#
+# This must be a stable identifier. Kernel names such as /dev/sdb are
+# reassigned between boots and hotplugs, and ps2hdd refuses to persist one:
+# writing to the wrong disk is the one mistake worth going out of the way to
+# prevent. `ps2hdd detect` prints the right path for your drive.
+#
+# A regular file is also accepted, which is how you work from a disk image.
+device = "/dev/disk/by-id/ata-WDC_WD1200JB-00REA0_WD-WCANM1234567"
+
+
+[sources]
+# Directories to browse for installable disc images.
+#
+# These are browsing locations, not a record of what is installed: only the HDD
+# decides that. You never have to put a game here to install it —
+# `ps2hdd install /any/path/game.iso` works.
+#
+# PS2: *.iso (and .bin/.img), identified from SYSTEM.CNF, not the filename.
+# PS1: *.cue preferred, with the .bin it names ignored as a separate entry.
+#      Multi-disc titles are grouped automatically.
+ps2 = "/mnt/nas/games/ps2"
+ps1 = "/mnt/nas/games/psx"
+
+
+[install]
+# Fetch artwork automatically after a successful install.
+sync_assets = true
+
+# Re-read the HDD after installing and confirm the game is really there.
+# Cheap, and it turns a silent failure into a loud one.
+verify_after_install = true
+
+
+[assets]
+# Artwork provider.
+#
+#   ps2-covers  front covers from the community databases PCSX2 and DuckStation
+#               use. Covers only; other slots are reported as unavailable
+#               rather than filled with a substitute.
+#   local       a directory on this machine (see mirror below).
+#   http        URL templates you supply (see [assets.templates] below).
+provider = "ps2-covers"
+
+# A local artwork collection. When set alongside a remote provider it is tried
+# first, so hand-curated art always wins.
+#
+# An OPL Manager art dump, or a copy of a working +OPL/ART, both work
+# unchanged: files are matched by OPL's own naming, and the dashed serial form
+# is accepted too.
+# mirror = "/mnt/nas/opl-art"
+
+# Which slots to keep in sync. Each maps to a file in +OPL/ART named
+# <serial>_<TYPE>.png, except config, which is +OPL/CFG/<serial>.cfg.
+#
+#   covers       COV (front) and COV2 (back)
+#   spines       LAB
+#   backgrounds  BG   640x480
+#   screenshots  SCR and SCR2   250x188
+#   icons        ICO  64x64
+#   logos        LGO  300x125
+#   config       the per-game OPL settings file
+#
+# Only the slots your provider can actually supply are worth enabling; the
+# others will simply be reported as missing. `ps2hdd art sync` says which.
+covers      = true
+spines      = false
+backgrounds = false
+screenshots = false
+icons       = false
+logos       = false
+config      = true
+
+# URL templates for the "http" provider. Placeholders:
+#
+#   {serial}        SLUS-20946    the dashed form the cover databases index by
+#   {serial_opl}    SLUS_209.46   the OPL form
+#   {serial_plain}  SLUS20946
+#   {type}          COV, BG, ICO, ...
+#   {platform}      ps2 or ps1
+#
+# [assets.templates]
+# COV = "https://example.invalid/art/{platform}/{serial}_COV.png"
+# BG  = "https://example.invalid/art/{platform}/{serial}_BG.png"
+
+
+[tools]
+# Explicit paths to the external tools. Leave unset to find them on PATH.
+#
+# Only writes need these. Reading the library, the partition table and the
+# drive status is done natively, so a missing hdl_dump leaves a working
+# read-only browser.
+# hdl_dump = "/usr/local/bin/hdl_dump"
+# pfsfuse  = "/usr/local/bin/pfsfuse"
+# pfsshell = "/usr/local/bin/pfsshell"
+
+# Use an external cue2pops for BIN/CUE to VCD conversion instead of the built-in
+# converter. The built-in one is verified byte-for-byte against cue2pops v2.0,
+# so this is only needed if you want its optional per-game patches.
+# cue2pops = "/usr/local/bin/cue2pops"
+
+# Run the tools that need raw block device access through `sudo -n`.
+#
+# Prefer the udev rule in docs/safety.md: it grants access to one specific
+# drive and needs no sudoers entry. If you do use this, add a narrow rule
+# allowing only hdl_dump and pfsfuse. Do not run the interface itself as root.
+sudo = false
+
+
+[tui]
+# Ask before anything destructive. Removal dialogs show the title, platform,
+# game ID and size, and open with "No" selected.
+confirm_destructive_actions = true

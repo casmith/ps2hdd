@@ -1,0 +1,180 @@
+// Package ps2 inspects PlayStation 2 disc images and installs them onto an
+// APA HDD through hdl_dump.
+package ps2
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"regexp"
+	"strings"
+
+	"github.com/casmith/ps2hdd/internal/iso9660"
+	"github.com/casmith/ps2hdd/internal/model"
+)
+
+// ErrNotPS2 means the image has no PS2 boot record.
+var ErrNotPS2 = errors.New("not a PlayStation 2 disc image")
+
+// cdSizeLimit is the largest a PS2 CD image can be. The medium tops out at a
+// 700 MB CD-ROM, so anything above this was mastered for DVD. hdl_dump needs
+// the distinction to choose inject_cd or inject_dvd, and getting it wrong
+// produces a game the console will not boot.
+const cdSizeLimit = 750 * 1024 * 1024
+
+// Image is the result of inspecting a PS2 disc image.
+type Image struct {
+	Path      string
+	GameID    string
+	Title     string
+	VolumeID  string
+	Media     model.MediaType
+	SizeBytes int64
+	// BootFile is the raw BOOT2 value, kept for diagnostics.
+	BootFile string
+}
+
+// Game converts an inspected image into a catalog entry.
+func (i Image) Game() model.Game {
+	return model.Game{
+		Platform:   model.PlatformPS2,
+		Title:      i.Title,
+		GameID:     i.GameID,
+		SizeBytes:  i.SizeBytes,
+		Media:      i.Media,
+		SourcePath: i.Path,
+		Discs: []model.Disc{{
+			Number:     1,
+			GameID:     i.GameID,
+			Title:      i.Title,
+			SourcePath: i.Path,
+			SizeBytes:  i.SizeBytes,
+		}},
+	}
+}
+
+// Inspect reads a PS2 ISO and extracts its identity.
+//
+// The serial comes from SYSTEM.CNF's BOOT2 line, which is authoritative;
+// filenames are only used to derive a display title, and never to decide
+// identity. An image whose SYSTEM.CNF is unreadable is reported as an error
+// rather than silently identified from its filename.
+func Inspect(path string) (Image, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Image{}, err
+	}
+	defer f.Close()
+
+	fi, err := f.Stat()
+	if err != nil {
+		return Image{}, err
+	}
+	img := Image{Path: path, SizeBytes: fi.Size()}
+
+	vol, err := iso9660.Open(iso9660.Mode2048(f))
+	if err != nil {
+		return img, fmt.Errorf("%s: %w: %v", filepath.Base(path), ErrNotPS2, err)
+	}
+	img.VolumeID = vol.VolumeID
+
+	cnf, err := vol.ReadFile("SYSTEM.CNF")
+	if err != nil {
+		return img, fmt.Errorf("%s: %w: SYSTEM.CNF is missing", filepath.Base(path), ErrNotPS2)
+	}
+	boot, ok := ParseSystemCNF(string(cnf), "BOOT2")
+	if !ok {
+		return img, fmt.Errorf("%s: %w: SYSTEM.CNF has no BOOT2 entry", filepath.Base(path), ErrNotPS2)
+	}
+	img.BootFile = boot
+	img.GameID = model.FindGameID(boot)
+	if img.GameID == "" {
+		return img, fmt.Errorf("%s: BOOT2 is %q, which carries no recognisable serial", filepath.Base(path), boot)
+	}
+
+	// The volume space size is what hdl_dump uses to size the install; it can
+	// be smaller than the file when the image is padded, and larger when the
+	// file has been truncated.
+	if vs := vol.SizeBytes(); vs > 0 && vs < img.SizeBytes {
+		img.SizeBytes = vs
+	}
+	img.Media = model.MediaDVD
+	if img.SizeBytes <= cdSizeLimit {
+		img.Media = model.MediaCD
+	}
+	img.Title = TitleFromPath(path, img.VolumeID)
+	return img, nil
+}
+
+// ParseSystemCNF returns the value of a SYSTEM.CNF key.
+//
+// SYSTEM.CNF is a handful of "KEY = value" lines with CRLF endings, and real
+// discs are inconsistent about spacing and case.
+func ParseSystemCNF(text, key string) (string, bool) {
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(strings.TrimRight(line, "\r\x00"))
+		k, v, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+		if !strings.EqualFold(strings.TrimSpace(k), key) {
+			continue
+		}
+		return strings.TrimSpace(v), true
+	}
+	return "", false
+}
+
+// TitleFromPath derives a display title. The image filename is what a user
+// recognises, so it wins; the ISO volume id is the fallback, and it is only
+// used when it is not just a restatement of the serial.
+func TitleFromPath(path, volumeID string) string {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base = CleanTitle(base)
+	if base != "" {
+		return base
+	}
+	if v := CleanTitle(volumeID); v != "" && model.FindGameID(volumeID) == "" {
+		return v
+	}
+	return filepath.Base(path)
+}
+
+// CleanTitle turns a filename into something readable: it drops a leading
+// serial, collapses separators, and trims the region and disc tags that
+// scene releases carry.
+func CleanTitle(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	// A leading "SLUS_209.46." or "SLUS-20946 - " prefix is redundant with the
+	// serial column, so it is removed.
+	if id := model.FindGameID(s); id != "" {
+		if i := serialPrefixEnd(s); i > 0 {
+			s = strings.TrimSpace(s[i:])
+			s = strings.TrimLeft(s, " -._")
+		}
+	}
+	s = strings.NewReplacer("_", " ", ".", " ").Replace(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// serialPrefixEnd reports the end of a serial that appears at the very start
+// of s, or 0 when the serial is elsewhere.
+func serialPrefixEnd(s string) int {
+	loc := serialLocation(s)
+	if loc == nil || loc[0] > 2 {
+		return 0
+	}
+	return loc[1]
+}
+
+func serialLocation(s string) []int {
+	return serialRe.FindStringIndex(s)
+}
+
+// serialRe mirrors the pattern in internal/model so that title cleaning can
+// locate a serial's extent, which FindGameID does not report.
+var serialRe = regexp.MustCompile(`(?i)\b([A-Z]{2,5})[ _\-]?([0-9]{3})[ .\-]?([0-9]{2})\b`)

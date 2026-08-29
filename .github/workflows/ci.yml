@@ -1,0 +1,110 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"
+            echo "$unformatted"
+            gofmt -d $unformatted
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      # The hardware-tagged tests never run here -- they need a real PS2 HDD --
+      # but they must still compile, or they rot.
+      - name: go vet (hardware build tag)
+        run: go vet -tags=hardware ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: go test
+        run: go test -race -count=1 ./...
+
+  staticcheck:
+    name: staticcheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
+      - name: install staticcheck
+        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+      - name: staticcheck
+        run: staticcheck ./...
+
+  # A smoke test that exercises the real CLI end to end against the synthetic
+  # environment: browse, install a PS2 title and a multi-disc PS1 title, sync
+  # artwork, remove. This is the closest CI can get to the hardware checklist.
+  demo:
+    name: demo smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
+      - name: build
+        run: go build -o ps2hdd ./cmd/ps2hdd
+      - name: run
+        run: ./scripts/demo-smoke.sh ./ps2hdd
+
+  release:
+    name: release build
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+          check-latest: true
+          cache: true
+      - name: build
+        env:
+          GOOS: linux
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
+          go build -trimpath -ldflags "-s -w -X main.version=${version}" \
+            -o "ps2hdd-linux-${GOARCH}" ./cmd/ps2hdd
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ps2hdd-linux-${{ matrix.goarch }}
+          path: ps2hdd-linux-${{ matrix.goarch }}
+          if-no-files-found: error

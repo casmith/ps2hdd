@@ -1,0 +1,261 @@
+package app
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
+
+	"github.com/casmith/ps2hdd/internal/asset"
+	"github.com/casmith/ps2hdd/internal/drive"
+	"github.com/casmith/ps2hdd/internal/external"
+	"github.com/casmith/ps2hdd/internal/logging"
+	"github.com/casmith/ps2hdd/internal/model"
+	"github.com/casmith/ps2hdd/internal/platform/ps1"
+)
+
+// RemoveOptions tune a removal.
+type RemoveOptions struct {
+	// PurgeAssets also deletes the game's artwork and configuration. It
+	// defaults to false: artwork is small, is often hand-curated, and is
+	// exactly what a user wants back if they reinstall.
+	PurgeAssets bool
+	OnProgress  ProgressFunc
+}
+
+// RemoveReport describes what a removal did, or would do under --dry-run.
+type RemoveReport struct {
+	Game model.Game `json:"game"`
+	// Commands lists the external command lines involved.
+	Commands [][]string `json:"commands,omitempty"`
+	// Files lists paths deleted from the HDD.
+	Files []string `json:"files,omitempty"`
+	// Assets lists artwork removed, when PurgeAssets was set.
+	Assets []string `json:"assets,omitempty"`
+	DryRun bool     `json:"dry_run,omitempty"`
+}
+
+// FindInstalled resolves a user-supplied name or serial to exactly one
+// installed title.
+//
+// Ambiguity is an error, never a choice made on the user's behalf: a wrong
+// guess here deletes a game.
+func (s *Services) FindInstalled(ctx context.Context, query string) (model.Game, error) {
+	games, err := s.Installed(ctx)
+	if err != nil {
+		return model.Game{}, err
+	}
+	norm := model.NormalizeGameID(query)
+	lower := strings.ToLower(strings.TrimSpace(query))
+
+	if norm != "" {
+		for _, g := range games {
+			if model.NormalizeGameID(g.GameID) == norm {
+				return g, nil
+			}
+		}
+	}
+	var exact, partial []model.Game
+	for _, g := range games {
+		t := strings.ToLower(g.Title)
+		switch {
+		case t == lower:
+			exact = append(exact, g)
+		case lower != "" && strings.Contains(t, lower):
+			partial = append(partial, g)
+		}
+		// The APA partition name is a legitimate way to name a PS2 game.
+		if g.PartitionName != "" && strings.EqualFold(g.PartitionName, query) {
+			return g, nil
+		}
+	}
+	matches := exact
+	if len(matches) == 0 {
+		matches = partial
+	}
+	switch len(matches) {
+	case 0:
+		return model.Game{}, &NotFoundError{Query: query}
+	case 1:
+		return matches[0], nil
+	default:
+		return model.Game{}, &AmbiguousError{Query: query, Matches: matches}
+	}
+}
+
+// Remove deletes an installed title.
+func (s *Services) Remove(ctx context.Context, g model.Game, opts RemoveOptions) (RemoveReport, error) {
+	switch g.Platform {
+	case model.PlatformPS2:
+		return s.removePS2(ctx, g, opts)
+	case model.PlatformPS1:
+		return s.removePS1(ctx, g, opts)
+	default:
+		return RemoveReport{}, fmt.Errorf("unsupported platform %q", g.Platform)
+	}
+}
+
+func (s *Services) removePS2(ctx context.Context, g model.Game, opts RemoveOptions) (RemoveReport, error) {
+	rep := RemoveReport{Game: g, DryRun: s.DryRun}
+	if !g.Installed {
+		return rep, fmt.Errorf("%s is not installed", g.Title)
+	}
+	if g.PartitionName == "" {
+		return rep, fmt.Errorf("%s has no recorded partition name; refusing to guess which partition to delete", g.Title)
+	}
+
+	opts.OnProgress.report(StageValidating, -1, "checking the HDD")
+	t, err := s.Target(ctx, true)
+	if err != nil {
+		return rep, err
+	}
+	args, err := external.RemoveArgs(t.Path, g.PartitionName)
+	if err != nil {
+		return rep, err
+	}
+	rep.Commands = append(rep.Commands, append([]string{external.HDLDumpTool}, args...))
+	if opts.PurgeAssets {
+		names, err := s.assetPaths(ctx, g)
+		if err == nil {
+			rep.Assets = names
+		}
+	}
+	if s.DryRun {
+		return rep, nil
+	}
+
+	unlock := s.LockHDD()
+	defer unlock()
+
+	opts.OnProgress.report(StageRemoving, -1, g.Title)
+	if err := s.HDL.Remove(ctx, t.Path, g.PartitionName); err != nil {
+		return rep, err
+	}
+	logging.ContextLogger(ctx).Info("removed PS2 game",
+		"title", g.Title, "id", g.GameID, "partition", g.PartitionName)
+
+	if opts.PurgeAssets {
+		if err := s.purgeAssets(ctx, g); err != nil {
+			logging.ContextLogger(ctx).Warn("artwork purge failed", "title", g.Title, "err", err)
+		}
+	}
+	opts.OnProgress.report(StageComplete, 1, g.Title)
+	return rep, nil
+}
+
+func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptions) (RemoveReport, error) {
+	rep := RemoveReport{Game: g, DryRun: s.DryRun}
+	if !g.Installed {
+		return rep, fmt.Errorf("%s is not installed", g.Title)
+	}
+	opts.OnProgress.report(StageValidating, -1, "checking the HDD")
+	if _, err := s.Target(ctx, true); err != nil {
+		return rep, err
+	}
+
+	// Removing a multi-disc title removes every disc: the user thinks of it as
+	// one game, and leaving disc 2 behind would be a surprise.
+	var names []string
+	for _, d := range g.Discs {
+		if d.InstalledName != "" {
+			names = append(names, d.InstalledName)
+		}
+	}
+	if len(names) == 0 {
+		return rep, fmt.Errorf("%s has no recorded VCD files; refusing to guess what to delete", g.Title)
+	}
+	for _, n := range names {
+		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+n)
+	}
+	discsDir := ""
+	if len(names) > 1 {
+		discsDir = ps1.DiscsDirName(g.Discs[0].GameID, g.Title)
+		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+discsDir+"/"+ps1.DiscsFile)
+	}
+	if opts.PurgeAssets {
+		if paths, err := s.assetPaths(ctx, g); err == nil {
+			rep.Assets = paths
+		}
+	}
+	if s.DryRun {
+		return rep, nil
+	}
+
+	unlock := s.LockHDD()
+	defer unlock()
+
+	m, err := s.Mounts(ctx)
+	if err != nil {
+		return rep, err
+	}
+	opts.OnProgress.report(StageRemoving, -1, g.Title)
+	err = m.With(ctx, ps1.POPSPartition, func(mp string) error {
+		for _, n := range names {
+			if err := os.Remove(filepath.Join(mp, n)); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s: %w", n, err)
+			}
+		}
+		if discsDir != "" {
+			dir := filepath.Join(mp, discsDir)
+			_ = os.Remove(filepath.Join(dir, ps1.DiscsFile))
+			// Only remove the directory if it is now empty; a user may keep
+			// per-game POPStarter files such as VMCDIR.TXT there.
+			if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+				_ = os.Remove(dir)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return rep, err
+	}
+	logging.ContextLogger(ctx).Info("removed PS1 game", "title", g.Title, "discs", len(names))
+
+	if opts.PurgeAssets {
+		if err := s.purgeAssets(ctx, g); err != nil {
+			logging.ContextLogger(ctx).Warn("artwork purge failed", "title", g.Title, "err", err)
+		}
+	}
+	opts.OnProgress.report(StageComplete, 1, g.Title)
+	return rep, nil
+}
+
+// assetPaths lists the artwork and configuration files belonging to a game
+// that actually exist on the HDD.
+func (s *Services) assetPaths(ctx context.Context, g model.Game) ([]string, error) {
+	m, err := s.Mounts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	err = m.With(ctx, drive.PartitionOPL, func(mp string) error {
+		types := append(append([]model.AssetType{}, model.ArtTypes...), model.AssetConfig)
+		for _, t := range types {
+			p := asset.Path(mp, g.GameID, t)
+			if _, err := os.Stat(p); err == nil {
+				out = append(out, asset.Dir(t)+"/"+asset.Filename(g.GameID, t))
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
+// purgeAssets deletes a game's artwork and configuration.
+func (s *Services) purgeAssets(ctx context.Context, g model.Game) error {
+	m, err := s.Mounts(ctx)
+	if err != nil {
+		return err
+	}
+	return m.With(ctx, drive.PartitionOPL, func(mp string) error {
+		types := append(append([]model.AssetType{}, model.ArtTypes...), model.AssetConfig)
+		for _, t := range types {
+			p := asset.Path(mp, g.GameID, t)
+			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+		}
+		return nil
+	})
+}
