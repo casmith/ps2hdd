@@ -14,9 +14,9 @@ jobs:
     name: test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           check-latest: true
@@ -50,8 +50,8 @@ jobs:
     name: staticcheck
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           check-latest: true
@@ -68,8 +68,8 @@ jobs:
     name: demo smoke test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           check-latest: true
@@ -86,10 +86,10 @@ jobs:
       matrix:
         goarch: [amd64, arm64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version: '1.24'
           check-latest: true
@@ -103,7 +103,7 @@ jobs:
           version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)
           go build -trimpath -ldflags "-s -w -X main.version=${version}" \
             -o "ps2hdd-linux-${GOARCH}" ./cmd/ps2hdd
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ps2hdd-linux-${{ matrix.goarch }}
           path: ps2hdd-linux-${{ matrix.goarch }}
