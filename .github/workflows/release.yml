@@ -1,0 +1,93 @@
+name: Release
+
+# Tags starting with v are the trigger. Everything after the tag is automated;
+# choosing the number stays a human decision, because it is a claim about
+# compatibility that no commit-message convention can make on its own.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Existing tag to build a release from'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: build and publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          # The full history, or `git describe` cannot see the tag it is
+          # standing on and every binary reports a bare commit hash.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          check-latest: true
+          cache: true
+
+      # A release is not the place to discover a broken build. CI has run
+      # these on the commit already; running them again costs two minutes and
+      # removes the case where a tag is pushed at something that never passed.
+      - name: verify
+        run: |
+          test -z "$(gofmt -l .)" || { gofmt -l .; echo 'gofmt: files need formatting'; exit 1; }
+          go vet ./...
+          go test -race -count=1 ./...
+
+      - name: build
+        run: |
+          version="${{ inputs.tag || github.ref_name }}"
+          echo "Building $version"
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH="$arch" CGO_ENABLED=0 go build \
+              -trimpath -ldflags "-s -w -X main.version=${version}" \
+              -o "ps2hdd-linux-${arch}" ./cmd/ps2hdd
+          done
+          # Confirm the version actually reached the binary. The ldflag path
+          # is easy to break silently -- it targets main.version, and a rename
+          # would leave every release reporting "dev" with nothing failing.
+          got=$(./ps2hdd-linux-amd64 --version)
+          echo "$got"
+          case "$got" in
+            *"$version"*) ;;
+            *) echo "the binary reports '$got', which does not contain '$version'"; exit 1 ;;
+          esac
+          sha256sum ps2hdd-linux-amd64 ps2hdd-linux-arm64 > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="${{ inputs.tag || github.ref_name }}"
+          gh release create "$version" \
+            --title "$version" \
+            --generate-notes \
+            --notes-file - \
+            ps2hdd-linux-amd64 ps2hdd-linux-arm64 SHA256SUMS <<NOTES
+          ## Install
+
+          \`\`\`sh
+          curl -LO https://github.com/${{ github.repository }}/releases/download/${version}/ps2hdd-linux-amd64
+          sudo install -m0755 ps2hdd-linux-amd64 /usr/local/bin/ps2hdd
+          \`\`\`
+
+          Use \`ps2hdd-linux-arm64\` on aarch64. \`/usr/local/bin\` matters: sudo's
+          \`secure_path\` does not include \`~/.local/bin\` or Homebrew, and ps2hdd
+          needs raw block device access, so a binary anywhere else is invisible to
+          exactly the runs that need it.
+
+          Verify with \`sha256sum -c SHA256SUMS\`.
+
+          Reading a PS2 HDD needs no external tools. Installing games needs
+          \`hdl_dump\`, and artwork or PS1 support needs \`pfsfuse\`; run
+          \`ps2hdd doctor\` and it prints the commands for your distribution.
+          NOTES

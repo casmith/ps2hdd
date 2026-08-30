@@ -76,12 +76,31 @@ BIN/CUE to VCD conversion is built in; no `cue2pops` needed.
 
 ## Install
 
+A static binary, no runtime dependencies:
+
+```sh
+curl -LO https://github.com/casmith/ps2hdd/releases/latest/download/ps2hdd-linux-amd64
+sudo install -m0755 ps2hdd-linux-amd64 /usr/local/bin/ps2hdd
+```
+
+Use `ps2hdd-linux-arm64` on aarch64. Each release also carries `SHA256SUMS`;
+`sha256sum -c SHA256SUMS` checks them.
+
+`/usr/local/bin` is not incidental. ps2hdd needs raw block device access, so it
+is normally run under `sudo`, and sudo's `secure_path` includes neither
+`~/.local/bin` nor Homebrew — a binary in either is invisible to exactly the
+runs that need it.
+
+Or from source, with Go 1.25 or later as declared in `go.mod`:
+
 ```sh
 go build -o ps2hdd ./cmd/ps2hdd
 sudo install -m 0755 ps2hdd /usr/local/bin/ps2hdd
 ```
 
-Go 1.25 or later, as declared in `go.mod`.
+A source build reports its version as `dev` unless you pass one:
+`-ldflags "-X main.version=$(git describe --tags --always)"`. Release binaries
+carry the tag they were built from, which `ps2hdd --version` prints.
 
 ## First run
 
@@ -378,6 +397,27 @@ go vet ./...
 gofmt -l .
 go build ./cmd/ps2hdd
 ```
+
+### Cutting a release
+
+```sh
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+The tag is the trigger. `.github/workflows/release.yml` re-runs gofmt, vet and
+the race suite on that commit, cross-compiles amd64 and arm64, checks that the
+binary actually reports the tag it was built from, writes `SHA256SUMS`, and
+publishes a GitHub Release with generated notes.
+
+The version reaches the binary through `-X main.version`, so it is only ever as
+good as `git describe` — with no tags at all it degrades to a bare commit hash,
+silently. The workflow asserts `--version` contains the tag rather than trusting
+that, because a rename of `main.version` would otherwise leave every release
+reporting `dev` with nothing failing.
+
+Choosing the number stays manual. It is a claim about compatibility, and no
+commit-message convention can make that claim on your behalf.
 
 The suite runs against synthetic APA images (`internal/apa/apasynth`),
 synthetic ISO 9660 and MODE2/2352 discs (`internal/iso9660/isosynth`),
