@@ -214,10 +214,24 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 	}
 	defer in.Close()
 
-	// PFS via FUSE does not always support rename, so the destination is
-	// written directly. A failed write is removed rather than left as a
-	// truncated image OPL would try to draw.
-	out, err := os.Create(item.Dest)
+	// The destination is removed before it is written, never truncated.
+	//
+	// os.Create is O_RDWR|O_CREAT|O_TRUNC, and O_TRUNC on a file that already
+	// exists makes the kernel ask the filesystem to truncate it. pfsfuse
+	// implements ftruncate but not truncate, so that request comes back
+	// ENOSYS -- "function not implemented" -- and the result is that every
+	// first write to a slot succeeds and every overwrite fails. Unlinking
+	// asks for nothing pfsfuse does not implement.
+	//
+	// PFS via FUSE does not always support rename, so there is no write-aside
+	// and swap: the old file goes before the new one arrives. A failed write
+	// is removed rather than left as a truncated image OPL would try to draw,
+	// which means an interrupted overwrite leaves the slot empty rather than
+	// stale. Empty is the better of the two -- the next sync fills it.
+	if err := os.Remove(item.Dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("replace %s: %w", filepath.Base(item.Dest), err)
+	}
+	out, err := os.OpenFile(item.Dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return 0, err
 	}
