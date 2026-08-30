@@ -66,6 +66,41 @@ your system is running from" into "permission denied". A user told they lack
 permission reaches for `sudo`, and reaching for `sudo` on their system disk is
 exactly what must not happen.
 
+### When the identity cross-check cannot run
+
+Checks 4 and 5 compare the model and serial embedded in the by-id name against
+what `lsblk` reports, and are only as good as `lsblk`'s answer. util-linux
+built without `libudev` cannot read the udev database and falls back to the raw
+sysfs SCSI INQUIRY strings: a truncated, space-padded model and no serial at
+all. A Homebrew `lsblk` ahead of `/usr/bin` on `PATH` is the usual way this
+happens, and it disappears under `sudo`, whose `secure_path` excludes it.
+
+ps2hdd treats an `lsblk` that reports no serial for a disk whose by-id name
+carries one as the cross-check being *unavailable*, not as a contradiction, and
+logs it. That is the same answer it gives when `lsblk` is missing altogether.
+Missing evidence is not evidence of a different disk, and refusing a correct
+identifier is how you teach someone to want an override flag.
+
+### A USB-attached drive has two identifiers
+
+An enclosure that supports ATA passthrough produces two by-id links for one
+disk:
+
+```
+ata-SPCC_Solid_State_Disk_AA000000000000007834
+usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0
+```
+
+The `usb-` name encodes the *bridge's* identity, while `lsblk` reports the
+*drive's*, passed through by the bridge. Configure the `ata-` link — which is
+what `ps2hdd detect --configure` picks. The `usb-` link is refused by check 5,
+and correctly so: it names the enclosure, so moving the drive to another
+enclosure would silently point it somewhere else.
+
+On an enclosure with no passthrough there is only the `usb-` link, and it is
+the right one to use. udev appends the SCSI LUN to those names (the `-0:0`
+above); that is addressing rather than identity, and it is not compared.
+
 A refusal looks like this:
 
 ```

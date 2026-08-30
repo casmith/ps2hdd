@@ -266,6 +266,27 @@ func (t *Target) checkIdentity(ctx context.Context, r external.Runner) error {
 	// (4)(5)(13) the by-id name usually embeds model and serial; when it does,
 	// a mismatch means the disk behind the link changed.
 	base := filepath.Base(t.Configured)
+
+	// Before believing a mismatch, check that lsblk is in a position to be
+	// believed. A <bus>-<model>_<serial> by-id name exists only because udev
+	// recorded a serial for this disk, so an lsblk that now reports none for
+	// the same disk is not saying the disk changed -- it is saying it could
+	// not read the udev database. util-linux built without libudev falls back
+	// to the raw sysfs INQUIRY strings, which yields an empty serial and a
+	// truncated, space-padded model that fails the model comparison on a
+	// perfectly correct identifier. A Homebrew lsblk ahead of /usr/bin on
+	// PATH is the usual way this happens.
+	//
+	// That is the same situation as lsblk being absent altogether, and it gets
+	// the same answer: the cross-check could not run, so say so and continue,
+	// rather than refusing a disk on evidence that was never gathered.
+	if hintedSerial(base) != "" && d.Serial == "" {
+		logging.ContextLogger(ctx).Warn("identity cross-check skipped",
+			"reason", "lsblk reported no serial; it is probably built without libudev",
+			"device", t.Path, "model", d.Model)
+		return nil
+	}
+
 	if want := hintedSerial(base); want != "" && d.Serial != "" && !strings.EqualFold(want, d.Serial) {
 		return refuse(t.Configured,
 			fmt.Sprintf("The identifier names serial %q but the device reports %q.", want, d.Serial),
@@ -301,7 +322,42 @@ func hintedSerial(base string) string {
 	if j < 0 || j == len(rest)-1 {
 		return ""
 	}
-	return rest[j+1:]
+	return trimLUN(rest[j+1:])
+}
+
+// trimLUN removes the SCSI LUN that udev's usb_id appends to ID_SERIAL, as in
+// usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0.
+//
+// The LUN is addressing, not identity, and lsblk reports the serial without
+// it. Leaving it attached makes every USB by-id name disagree with the disk it
+// correctly names -- which matters because a USB adapter is how most people
+// attach a PS2 HDD to a PC.
+//
+// Only a trailing <digits>:<digits> is removed. Serials do contain hyphens,
+// and one must never be mistaken for a LUN.
+func trimLUN(s string) string {
+	i := strings.LastIndexByte(s, '-')
+	if i <= 0 {
+		return s
+	}
+	lun := s[i+1:]
+	colon := strings.IndexByte(lun, ':')
+	if colon <= 0 || colon == len(lun)-1 {
+		return s
+	}
+	if !allDigits(lun[:colon]) || !allDigits(lun[colon+1:]) {
+		return s
+	}
+	return s[:i]
+}
+
+func allDigits(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return len(s) > 0
 }
 
 // modelConsistent reports whether the model embedded in a by-id name agrees
@@ -320,17 +376,41 @@ func modelConsistent(base, model string) bool {
 	default:
 		return true // wwn- and by-path names carry no model
 	}
+	bus := base[:i]
 	rest := base[i+1:]
 	j := strings.LastIndexByte(rest, '_')
 	if j < 0 {
 		return true
 	}
-	hinted := normaliseModel(rest[:j])
+	name := rest[:j]
 	got := normaliseModel(model)
-	if hinted == "" || got == "" {
+	if got == "" {
 		return true
 	}
-	return strings.HasPrefix(hinted, got) || strings.HasPrefix(got, hinted)
+
+	// The name half of a by-id link is not the same field on every bus. For
+	// ata- and nvme- udev builds ID_SERIAL as <model>_<serial>, so the name is
+	// the model outright. For usb- and scsi- it builds
+	// <manufacturer>_<product>_<serial> while setting ID_MODEL -- what lsblk
+	// reports -- to the product alone. Comparing the two forms directly makes
+	// "SABRENT_SSHD" disagree with "SSHD" and refuses a correct identifier,
+	// so on those buses the vendor-stripped form is accepted too.
+	candidates := []string{name}
+	if bus == "usb" || bus == "scsi" {
+		if k := strings.IndexByte(name, '_'); k > 0 && k < len(name)-1 {
+			candidates = append(candidates, name[k+1:])
+		}
+	}
+	for _, c := range candidates {
+		hinted := normaliseModel(c)
+		if hinted == "" {
+			return true
+		}
+		if strings.HasPrefix(hinted, got) || strings.HasPrefix(got, hinted) {
+			return true
+		}
+	}
+	return false
 }
 
 func normaliseModel(s string) string {
