@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/casmith/ps2hdd/internal/apa/apasynth"
 	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/demo"
@@ -16,6 +17,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
+	"github.com/casmith/ps2hdd/internal/platform/ps1"
 )
 
 func TestMain(m *testing.M) {
@@ -619,5 +621,105 @@ func TestCatalogFailsWhenTheHDDCannotBeRead(t *testing.T) {
 	}
 	if len(c.Entries) != 0 {
 		t.Errorf("a usable-looking catalog came back with the error: %d entries", len(c.Entries))
+	}
+}
+
+func TestNormalisePartitionSize(t *testing.T) {
+	good := map[string]string{
+		"20G": "20G", "8g": "8G", " 1G ": "1G", "128M": "128M", "256m": "256M",
+	}
+	for in, want := range good {
+		got, err := app.NormalisePartitionSize(in)
+		if err != nil || got != want {
+			t.Errorf("NormalisePartitionSize(%q) = %q, %v; want %q, nil", in, got, err, want)
+		}
+	}
+	// APA allocates in 128 MiB units, so a size that cannot be honoured as
+	// written is rejected rather than silently rounded.
+	for _, in := range []string{"", "20", "20T", "0G", "-1G", "64M", "200M", "1.5G", "GG"} {
+		if got, err := app.NormalisePartitionSize(in); err == nil {
+			t.Errorf("NormalisePartitionSize(%q) = %q, want an error", in, got)
+		}
+	}
+}
+
+// pfsshell is a shell: a failed `mkpart` prints "(!) Exit code is -1." and the
+// shell then exits 0 anyway. Nothing may conclude the partition exists from
+// the tool having run -- only from reading the table back.
+func TestCreatePOPSPartitionVerifiesTheResult(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	disk := apasynth.DefaultDisk()
+	var without []apasynth.PFSPart
+	for _, p := range disk.Parts {
+		if p.ID != ps1.POPSPartition {
+			without = append(without, p)
+		}
+	}
+	disk.Parts = without
+
+	img := filepath.Join(root, "ps2.img")
+	if err := apasynth.Write(img, disk); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
+	cfg.Device = img
+
+	runner := external.NewFakeRunner()
+	runner.Responses[external.PFSShellTool] = []external.Result{{
+		Stdout: "> # (!) Exit code is -1.\n__.POPS: not enough free space.\n",
+	}}
+	svc := app.New(cfg, runner)
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+
+	rep, err := svc.CreatePOPSPartition(context.Background(), "8G")
+	if err == nil {
+		t.Fatal("a pfsshell run that created nothing was reported as success")
+	}
+	if rep.Created {
+		t.Error("report says Created with no partition on the disk")
+	}
+	// The failure has to carry pfsshell's own words, or the user is left
+	// guessing at what went wrong inside a tool they did not run themselves.
+	if !strings.Contains(err.Error(), "not enough free space") {
+		t.Errorf("error does not quote pfsshell:\n%v", err)
+	}
+}
+
+func TestCreatePOPSPartitionRefusesWhenItExists(t *testing.T) {
+	svc, _ := newTestServices(t)
+	runner := svc.Runner.(*external.FakeRunner)
+
+	_, err := svc.CreatePOPSPartition(context.Background(), "8G")
+	if err == nil {
+		t.Fatal("creating a partition that already exists was allowed")
+	}
+	if !strings.Contains(err.Error(), "already exists") {
+		t.Errorf("err = %v", err)
+	}
+	// Refused before the tool ran, not after.
+	if calls := runner.CallsTo(external.PFSShellTool); len(calls) != 0 {
+		t.Errorf("pfsshell was run %d time(s) despite the refusal", len(calls))
+	}
+}
+
+func TestCreatePOPSPartitionDryRunTouchesNothing(t *testing.T) {
+	svc, _ := newTestServices(t)
+	svc.DryRun = true
+	runner := svc.Runner.(*external.FakeRunner)
+
+	rep, err := svc.CreatePOPSPartition(context.Background(), "8G")
+	// The demo disk already has __.POPS, so a dry run must still refuse for
+	// that reason; what matters is that no write was attempted either way.
+	if err == nil && rep.Created {
+		t.Error("a dry run reported the partition as created")
+	}
+	if calls := runner.CallsTo(external.PFSShellTool); len(calls) != 0 {
+		t.Errorf("a dry run ran pfsshell %d time(s)", len(calls))
 	}
 }

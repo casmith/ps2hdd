@@ -244,6 +244,15 @@ copies the user supplies with `ps2hdd setup ps1 --import <dir>`. Only files
 whose names match the documented runtime are copied; anything else in the
 import directory is listed and left alone.
 
+**The `__.POPS` partition is created by pfsshell, not by ps2hdd.**
+`ps2hdd setup ps1 --create-pops <size>` drives `pfsshell mkpart`, because APA
+allocation -- a main partition plus however many sub-extents the size needs --
+is the reference implementation's job, exactly as injecting a game is
+hdl_dump's. pfsshell is an interactive shell, so a failed `mkpart` prints
+`(!) Exit code is -1.` and then exits 0; the exit status carries no
+information, and ps2hdd confirms the result by reading the partition table back
+with the native reader.
+
 ---
 
 ## VCD conversion

@@ -160,7 +160,7 @@ ps2hdd assets sync SLUS_209.46 --overwrite
 ps2hdd assets clean
 ps2hdd database update
 
-ps2hdd setup ps1 [--import ~/pops-files]
+ps2hdd setup ps1 [--create-pops 20G] [--import ~/pops-files]
 ps2hdd config show
 ps2hdd config set sources.ps2 /mnt/nas/games/ps2
 ```
@@ -235,11 +235,20 @@ says so plainly, and imports copies you supply:
 
 ```sh
 ps2hdd setup ps1                       # what is missing
-ps2hdd setup ps1 --import ~/pops-files # copy in your own
+ps2hdd setup ps1 --create-pops 20G     # create the partition the VCDs live in
+ps2hdd setup ps1 --import ~/pops-files # copy in your own runtime files
 ```
 
 Only files matching the documented runtime are copied; anything else in that
 directory is listed and left alone.
+
+`--create-pops` sizes the partition for the library you intend to keep — a VCD
+is a raw 2352-bytes-per-sector image, so budget around 750 MB per disc, and err
+large, because growing it afterwards needs a PS2-side tool. The allocation is
+done by `pfsshell` rather than by ps2hdd, for the same reason installs go
+through `hdl_dump`: the reference implementation decides how APA space is laid
+out. ps2hdd confirms the result by reading the partition table back, because
+`pfsshell` is a shell and a failed `mkpart` still exits 0.
 
 Installing a PS1 game converts the rip to POPS's VCD format — built in, and
 verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies

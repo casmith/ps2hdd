@@ -105,3 +105,11 @@ PP.HDL.Burnout 3
 		}
 	}
 }
+
+func TestMkPartScript(t *testing.T) {
+	got := MkPartScript("/dev/sdc", "__.POPS", "20G", "PFS")
+	want := "device /dev/sdc\nmkpart __.POPS 20G PFS\nexit\n"
+	if got != want {
+		t.Errorf("MkPartScript = %q, want %q", got, want)
+	}
+}

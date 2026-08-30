@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -38,6 +39,7 @@ missing.`,
 
 func newSetupPS1Command(env *Env) *cobra.Command {
 	var importDir string
+	var createPOPS string
 	cmd := &cobra.Command{
 		Use:   "ps1",
 		Short: "Check PS1/POPStarter support and import runtime files",
@@ -53,9 +55,29 @@ source. POPSTARTER.ELF comes from the POPStarter release.
 
 Only files whose names match the runtime are copied. Everything else in the
 import directory is listed and left alone, so nothing unexpected ends up in a
-partition the console boots from.`,
+partition the console boots from.
+
+--create-pops creates the __.POPS partition the VCDs live in, at the size you
+give it:
+
+  ps2hdd setup ps1 --create-pops 20G
+
+Size it for the library you intend to keep: a VCD is a raw 2352-bytes-per-sector
+image, so budget around 750 MB per disc. APA allocates in 128 MiB units, so the
+size must be a multiple of that; every whole number of gigabytes is. Growing the
+partition afterwards needs a PS2-side tool, so err large.
+
+The allocation itself is done by pfsshell, not by ps2hdd, for the same reason
+installs go through hdl_dump: the reference implementation decides how APA
+space is laid out. ps2hdd confirms the result by reading the partition table
+back afterwards.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if createPOPS != "" {
+				if err := createPOPSPartition(env, cmd, createPOPS); err != nil {
+					return err
+				}
+			}
 			rep, err := env.Svc.SetupPS1(cmd.Context(), app.SetupPS1Options{
 				ImportDir: config.ExpandPath(importDir),
 			})
@@ -108,7 +130,46 @@ partition the console boots from.`,
 		},
 	}
 	cmd.Flags().StringVar(&importDir, "import", "", "copy POPS runtime files from this directory onto the HDD")
+	cmd.Flags().StringVar(&createPOPS, "create-pops", "",
+		"create the __.POPS partition at this size (e.g. 20G) before checking readiness")
 	return cmd
+}
+
+// createPOPSPartition runs the partition creation half of `setup ps1`.
+//
+// It is a write to the drive, so it confirms first unless the user has opted
+// out, and it reports what happened before readiness is re-checked -- the
+// readiness block printed afterwards is the proof it worked.
+func createPOPSPartition(env *Env, cmd *cobra.Command, size string) error {
+	normalised, err := app.NormalisePartitionSize(size)
+	if err != nil {
+		return err
+	}
+	if !env.Svc.DryRun && !env.Svc.AssumeYes && env.Config.TUI.ConfirmDestructiveActions {
+		env.printf("Create the %s partition (%s) on %s?\n", ps1.POPSPartition, normalised, env.Config.Device)
+		env.printf("%s\n", dim("Existing partitions are not touched, but this writes to the APA table."))
+		if !confirm(env.In, env.Out, "Proceed?") {
+			return fmt.Errorf("cancelled")
+		}
+	}
+
+	rep, err := env.Svc.CreatePOPSPartition(cmd.Context(), size)
+	if err != nil {
+		return err
+	}
+	if env.JSON {
+		return env.emitJSON(rep)
+	}
+	if rep.DryRun {
+		section(env.Out, "Would create")
+		env.printf("  %s at %s, with:\n", rep.Partition, rep.Size)
+		for _, line := range strings.Split(strings.TrimSpace(rep.Script), "\n") {
+			env.printf("    %s\n", dim(line))
+		}
+		return nil
+	}
+	env.printf("Created %s (%s).\n", rep.Partition, rep.Size)
+	return nil
 }
 
 func newConfigCommand(env *Env) *cobra.Command {
