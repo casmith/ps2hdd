@@ -6,6 +6,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/tui/components"
 )
@@ -136,9 +137,19 @@ func (m *Model) renderAssets() string {
 	b.WriteString("\n\n")
 
 	if m.assetErr != nil {
+		if mt, ok := app.AsMissingTool(m.assetErr); ok {
+			b.WriteString(components.StyleWarning.Render("Artwork is unavailable"))
+			b.WriteString("\n\n" + components.StyleMuted.Render(m.wrap(
+				"Artwork lives in +OPL/ART on the HDD, which is a PFS partition. Reading it "+
+					"needs "+mt.Tool+", which is not installed.\n\n"+
+					"Everything else works without it: games are listed, and PS2 titles can "+
+					"still be installed and removed.")))
+			b.WriteString("\n\n" + components.StyleAccent.Render(mt.Advice()))
+			return b.String()
+		}
 		b.WriteString(components.StyleDanger.Render(m.assetErr.Error()))
-		b.WriteString("\n\n" + components.StyleMuted.Render(
-			"Artwork lives in +OPL/ART, which needs pfsfuse to reach."))
+		b.WriteString("\n\n" + components.StyleMuted.Render(m.wrap(
+			"Artwork lives in +OPL/ART, which needs pfsfuse to reach.")))
 		return b.String()
 	}
 	if m.loadingArt && len(m.assetRows) == 0 {

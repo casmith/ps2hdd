@@ -187,7 +187,9 @@ func renderGameDetail(env *Env, e catalog.CatalogEntry) {
 
 	if e.Installed {
 		section(env.Out, "Artwork")
-		if len(e.MissingAssets) == 0 {
+		if !e.AssetsKnown {
+			env.printf("  %s\n", dim("unknown (+OPL could not be read)"))
+		} else if len(e.MissingAssets) == 0 {
 			env.printf("  %s\n", green("complete"))
 		} else {
 			for _, t := range e.MissingAssets {

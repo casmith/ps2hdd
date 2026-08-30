@@ -101,6 +101,7 @@ func TestFilter(t *testing.T) {
 		nil,
 	)
 	c.Entries[0].MissingAssets = []model.AssetType{model.AssetCover}
+	c.Entries[0].AssetsKnown = true
 
 	cases := []struct {
 		name string
@@ -164,8 +165,42 @@ func TestCounts(t *testing.T) {
 		nil,
 	)
 	c.Entries[0].MissingAssets = []model.AssetType{model.AssetCover}
+	c.Entries[0].AssetsKnown = true
 	inst, avail, missing := c.Counts()
 	if inst != 2 || avail != 1 || missing != 1 {
 		t.Errorf("counts = %d/%d/%d", inst, avail, missing)
+	}
+}
+
+// An entry whose artwork was never inspected must not be reported as missing
+// artwork, nor as complete. Reading +OPL needs pfsfuse; without it the answer
+// is unknown, and saying anything else is a false claim.
+func TestUncheckedArtworkIsNeitherCompleteNorMissing(t *testing.T) {
+	c := catalog.Reconcile([]model.Game{installedPS2("A", "SLUS_200.01")}, nil, nil)
+	e := c.Entries[0]
+	if e.AssetsKnown {
+		t.Fatal("AssetsKnown defaults to true")
+	}
+	if len(e.MissingAssets) != 0 {
+		t.Fatal("an unchecked entry should list no missing assets")
+	}
+
+	// It must not match a "missing artwork" filter...
+	if got := len(c.Apply(catalog.Filter{MissingAsset: true})); got != 0 {
+		t.Errorf("an unchecked entry matched the missing-artwork filter (%d)", got)
+	}
+	// ...and must not be counted as missing artwork either.
+	if _, _, missing := c.Counts(); missing != 0 {
+		t.Errorf("Counts reported %d missing artwork for an unchecked entry", missing)
+	}
+
+	// Once checked with nothing missing, it is genuinely complete.
+	c.Entries[0].AssetsKnown = true
+	if got := len(c.Apply(catalog.Filter{MissingAsset: true})); got != 0 {
+		t.Errorf("a checked, complete entry matched the missing-artwork filter (%d)", got)
+	}
+	c.Entries[0].MissingAssets = []model.AssetType{model.AssetCover}
+	if got := len(c.Apply(catalog.Filter{MissingAsset: true})); got != 1 {
+		t.Errorf("a checked entry with a gap did not match the filter (%d)", got)
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/demo"
 	"github.com/casmith/ps2hdd/internal/drive"
+	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 )
@@ -501,4 +502,80 @@ func findGame(games []model.Game, id string) *model.Game {
 		}
 	}
 	return nil
+}
+
+// A missing optional tool is a setup gap, not a malfunction. It has to be
+// reported as such, with the remedy attached, because it recurs on every
+// refresh until the user installs the tool -- and a permanent red banner
+// teaches people to ignore red banners.
+func TestMissingToolIsReportedAsASetupGap(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	env, err := demo.Setup(filepath.Join(root, "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := env.Config(config.Default())
+	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
+
+	// A runner that has everything except pfsfuse, which is exactly the state
+	// of a machine where hdl_dump was installed but pfsshell was not.
+	runner := env.Runner().(*external.FakeRunner)
+	runner.Missing[external.PFSFuseTool] = true
+
+	svc := app.New(cfg, runner)
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+	ctx := context.Background()
+
+	// The catalog still loads: PS2 games come from the native APA reader and
+	// need no external tool at all.
+	c, warnings := svc.Catalog(ctx)
+	var ps2 int
+	for _, e := range c.Entries {
+		if e.Installed && e.Platform == model.PlatformPS2 {
+			ps2++
+		}
+	}
+	if ps2 == 0 {
+		t.Error("no PS2 games listed; the read path should not depend on pfsfuse")
+	}
+	if len(warnings) == 0 {
+		t.Fatal("no warning about the missing tool")
+	}
+
+	var found bool
+	for _, w := range warnings {
+		mt, ok := app.AsMissingTool(w)
+		if !ok {
+			continue
+		}
+		found = true
+		if mt.Tool != external.PFSFuseTool {
+			t.Errorf("Tool = %q", mt.Tool)
+		}
+		if !strings.Contains(mt.Error(), "not installed") {
+			t.Errorf("message does not say what is wrong: %q", mt.Error())
+		}
+		if !strings.Contains(mt.Advice(), "Install") || !strings.Contains(mt.Advice(), "dependencies.md") {
+			t.Errorf("advice is not actionable: %q", mt.Advice())
+		}
+		if !app.IsSetupGap(w) {
+			t.Error("IsSetupGap = false for a missing tool")
+		}
+	}
+	if !found {
+		t.Errorf("warnings were not classified as a setup gap: %v", warnings)
+	}
+
+	// The artwork paths report the same way rather than leaking a raw
+	// "external tool not found" from deep in the mount code.
+	if _, err := svc.AssetStatus(ctx, nil); err == nil {
+		t.Error("AssetStatus succeeded without pfsfuse")
+	} else if _, ok := app.AsMissingTool(err); !ok {
+		t.Errorf("AssetStatus error is not a MissingToolError: %v", err)
+	}
 }

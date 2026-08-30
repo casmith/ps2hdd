@@ -184,21 +184,32 @@ func (s *Services) InstalledPS2(ctx context.Context) ([]model.Game, error) {
 }
 
 // InstalledPS1 lists installed PS1 titles.
+//
+// PS1 titles live in a PFS partition, so this is the one listing that needs an
+// external tool. A missing one is reported as a setup gap rather than a raw
+// "external tool not found" from deep in the mount code.
 func (s *Services) InstalledPS1(ctx context.Context) ([]model.Game, error) {
 	r, err := s.reader(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.PS1Games(ctx)
+	games, err := r.PS1Games(ctx)
+	return games, missingTool(err, external.PFSFuseTool, "PlayStation 1 games")
 }
 
 // Installed lists every installed title.
+//
+// The PS2 half comes from the native APA reader and always succeeds; the PS1
+// half needs a PFS mount. When only the PS1 half fails the PS2 games are still
+// returned alongside the error, because a partial library is more useful than
+// none.
 func (s *Services) Installed(ctx context.Context) ([]model.Game, error) {
 	r, err := s.reader(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return r.All(ctx)
+	games, err := r.All(ctx)
+	return games, missingTool(err, external.PFSFuseTool, "PlayStation 1 games")
 }
 
 // PS1Readiness reports whether POPStarter is set up.
@@ -265,12 +276,9 @@ func (s *Services) ClearSourceCache() error {
 func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error) {
 	var warnings []error
 
-	var installed []model.Game
-	if games, err := s.Installed(ctx); err != nil {
-		warnings = append(warnings, err)
-		installed = games
-	} else {
-		installed = games
+	installed, err := s.Installed(ctx)
+	if err != nil {
+		warnings = append(warnings, missingTool(err, external.PFSFuseTool, "PlayStation 1 games"))
 	}
 
 	ps2Res, ps1Res, err := s.ScanSources(ctx)
@@ -283,7 +291,7 @@ func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error) {
 	c := catalog.Reconcile(installed, source, problems)
 
 	if err := s.annotateAssets(ctx, &c); err != nil {
-		warnings = append(warnings, fmt.Errorf("artwork status unavailable: %w", err))
+		warnings = append(warnings, missingTool(err, external.PFSFuseTool, "Artwork status"))
 	}
 	return c, warnings
 }
@@ -325,6 +333,7 @@ func (s *Services) annotateAssets(ctx context.Context, c *catalog.Catalog) error
 			continue
 		}
 		c.Entries[i].MissingAssets = inv.Missing(c.Entries[i].GameID, want)
+		c.Entries[i].AssetsKnown = true
 	}
 	return nil
 }

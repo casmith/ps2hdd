@@ -46,8 +46,12 @@ func (m *Model) installedRows() []components.Row {
 		}
 		art := "complete"
 		style := &components.StyleBase
-		if n := len(e.MissingAssets); n > 0 {
-			art = fmt.Sprintf("%d missing", n)
+		switch {
+		case !e.AssetsKnown:
+			// +OPL could not be read, so nothing is known either way.
+			art, style = "unknown", &components.StyleMuted
+		case len(e.MissingAssets) > 0:
+			art = fmt.Sprintf("%d missing", len(e.MissingAssets))
 			style = &components.StyleWarning
 		}
 		rows = append(rows, components.Row{
@@ -220,7 +224,9 @@ func (m *Model) renderDetail(e catalog.CatalogEntry) string {
 
 	if e.Installed {
 		b.WriteString("\n\n" + components.StyleHeader.Render("Artwork") + "\n")
-		if len(e.MissingAssets) == 0 {
+		if !e.AssetsKnown {
+			b.WriteString("\n  " + components.StyleMuted.Render("unknown -- +OPL could not be read"))
+		} else if len(e.MissingAssets) == 0 {
 			b.WriteString("\n  " + components.StyleSuccess.Render("complete"))
 		} else {
 			for _, t := range e.MissingAssets {

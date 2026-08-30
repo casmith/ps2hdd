@@ -101,6 +101,11 @@ func artworkLabel(e catalog.CatalogEntry) string {
 	if !e.Installed {
 		return dim("-")
 	}
+	// Never claim completeness that was not verified: reading +OPL needs
+	// pfsfuse, and without it the answer is genuinely unknown.
+	if !e.AssetsKnown {
+		return dim("unknown")
+	}
 	if len(e.MissingAssets) == 0 {
 		return green("complete")
 	}

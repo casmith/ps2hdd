@@ -13,6 +13,12 @@ type CatalogEntry struct {
 	model.Game
 	AvailableInSource bool              `json:"available_in_source"`
 	MissingAssets     []model.AssetType `json:"missing_assets,omitempty"`
+	// AssetsKnown records that the artwork inventory was actually read. When
+	// it is false an empty MissingAssets means "not checked", not "complete":
+	// reading +OPL needs pfsfuse, which may not be installed, and reporting a
+	// game as having complete artwork without having looked would be a
+	// confident false claim.
+	AssetsKnown bool `json:"assets_known"`
 	// SourceGame carries the source-side view when a title is both installed
 	// and available, so the details view can show the image path alongside the
 	// installed partition.
@@ -139,7 +145,9 @@ func (f Filter) Match(e CatalogEntry) bool {
 	if f.NotInstalled && e.Installed {
 		return false
 	}
-	if f.MissingAsset && len(e.MissingAssets) == 0 {
+	// An unchecked entry cannot be said to be missing artwork, so it does not
+	// match a filter that asks for exactly that.
+	if f.MissingAsset && (!e.AssetsKnown || len(e.MissingAssets) == 0) {
 		return false
 	}
 	if f.MultiDisc && !e.IsMultiDisc() {
@@ -209,7 +217,7 @@ func (c Catalog) Counts() (installed, available, missingAssets int) {
 		} else {
 			available++
 		}
-		if len(e.MissingAssets) > 0 {
+		if e.AssetsKnown && len(e.MissingAssets) > 0 {
 			missingAssets++
 		}
 	}

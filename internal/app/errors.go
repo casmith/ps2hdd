@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
@@ -29,6 +30,60 @@ var (
 	// path is inert.
 	ErrDryRun = errors.New("dry run")
 )
+
+// MissingToolError says a feature is unavailable because an external tool is
+// not installed.
+//
+// This is a setup gap, not a failure: nothing went wrong, a capability simply
+// is not there. Front ends are expected to present it differently from an
+// error -- calmly, once, with the fix -- because a missing optional tool is a
+// stable condition that will be reported on every single refresh until the
+// user does something about it, and a red banner that never goes away trains
+// people to ignore red banners.
+type MissingToolError struct {
+	// Tool is the executable that is absent, e.g. "pfsfuse".
+	Tool string
+	// Feature is what cannot be done without it, phrased as a noun so it
+	// reads in a sentence: "artwork status".
+	Feature string
+}
+
+func (e *MissingToolError) Error() string {
+	return fmt.Sprintf("%s needs %s, which is not installed", e.Feature, e.Tool)
+}
+
+// Advice returns the one-line fix.
+func (e *MissingToolError) Advice() string {
+	return fmt.Sprintf("Install %s, then press r to refresh. See docs/dependencies.md.", e.Tool)
+}
+
+// Unwrap lets errors.Is find the underlying sentinel.
+func (e *MissingToolError) Unwrap() error { return external.ErrToolMissing }
+
+// AsMissingTool returns the MissingToolError in err, if there is one.
+func AsMissingTool(err error) (*MissingToolError, bool) {
+	var m *MissingToolError
+	ok := errors.As(err, &m)
+	return m, ok
+}
+
+// IsSetupGap reports whether an error is a missing capability rather than a
+// malfunction. Front ends use it to choose a tone.
+func IsSetupGap(err error) bool {
+	return errors.Is(err, external.ErrToolMissing)
+}
+
+// missingTool wraps an error as a MissingToolError when it was caused by an
+// absent executable, and returns it unchanged otherwise.
+func missingTool(err error, tool, feature string) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, external.ErrToolMissing) {
+		return &MissingToolError{Tool: tool, Feature: feature}
+	}
+	return err
+}
 
 // AmbiguousError is returned when a query names more than one title. It is a
 // distinct type because the right response is to show the candidates and stop,

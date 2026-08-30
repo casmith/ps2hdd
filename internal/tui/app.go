@@ -634,7 +634,16 @@ func (m *Model) renderStatus() string {
 			components.Spinner(m.tickCount)+" reading the library…")
 	}
 	if len(m.warnings) > 0 {
-		return components.StatusLine(m.width, components.DialogDanger, m.warnings[0].Error())
+		w := m.warnings[0]
+		// A missing optional tool is a setup gap, not a malfunction, and it
+		// will be reported on every refresh until it is fixed. Amber with the
+		// remedy attached, rather than red.
+		if mt, ok := app.AsMissingTool(w); ok {
+			return components.StatusLine(m.width, components.DialogConfirm,
+				components.StyleWarning.Render(mt.Error())+"  "+
+					components.StyleMuted.Render(mt.Advice()))
+		}
+		return components.StatusLine(m.width, components.DialogDanger, w.Error())
 	}
 	return components.StatusLine(m.width, components.DialogConfirm, "")
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/asset"
 	"github.com/casmith/ps2hdd/internal/drive"
+	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
@@ -17,10 +18,13 @@ import (
 // AssetStatus reports artwork completeness for the installed library.
 func (s *Services) AssetStatus(ctx context.Context, games []model.Game) ([]asset.StatusRow, error) {
 	if games == nil {
-		var err error
-		if games, err = s.Installed(ctx); err != nil {
+		// A PS1 listing failure must not hide the PS2 games' artwork status:
+		// Installed returns what it could read alongside the error.
+		got, err := s.Installed(ctx)
+		if err != nil && len(got) == 0 {
 			return nil, err
 		}
+		games = got
 	}
 	m, err := s.Mounts(ctx)
 	if err != nil {
@@ -35,7 +39,7 @@ func (s *Services) AssetStatus(ctx context.Context, games []model.Game) ([]asset
 		rows = asset.Status(games, inv, s.Config.WantedAssets())
 		return nil
 	})
-	return rows, err
+	return rows, missingTool(err, external.PFSFuseTool, "Artwork status")
 }
 
 // SyncAssetsOptions tune an artwork sync.
@@ -89,7 +93,7 @@ func (s *Services) SyncAssets(ctx context.Context, games []model.Game, opts Sync
 		res, err = mgr.Apply(ctx, plan, opts.OnProgress)
 		return err
 	})
-	return plan, res, err
+	return plan, res, missingTool(err, external.PFSFuseTool, "Artwork sync")
 }
 
 // CleanAssetCache empties the artwork download cache.
