@@ -289,6 +289,13 @@ func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error, error
 	switch {
 	case errors.As(err, &partial):
 		warnings = append(warnings, partial.Err)
+	case errors.Is(err, ErrNoDevice):
+		// No drive configured is not a failed read. There is no disk to be
+		// wrong about, every write path refuses on its own for the same
+		// reason, and browsing the source directories without a drive
+		// attached is a supported thing to do. Only a device that exists and
+		// could not be read makes the catalog untrustworthy.
+		warnings = append(warnings, err)
 	case err != nil:
 		return catalog.Catalog{}, nil, err
 	}

@@ -870,3 +870,48 @@ func TestCrossCheckSurvivesAnHDLDumpFailure(t *testing.T) {
 		t.Errorf("reason does not quote hdl_dump: %q", cc.Unavailable)
 	}
 }
+
+// No drive configured is a different thing from a drive that could not be
+// read. There is no disk to be wrong about, so the source half must still be
+// browsable -- that is the read-only browser the README promises on a machine
+// with nothing set up yet.
+func TestCatalogWithoutADeviceStillListsSources(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	env, err := demo.Setup(filepath.Join(root, "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := env.Config(config.Default())
+	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
+	cfg.Device = "" // sources configured, no drive
+
+	svc := app.New(cfg, env.Runner())
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+
+	c, warnings, err := svc.Catalog(context.Background())
+	if err != nil {
+		t.Fatalf("Catalog refused to build without a device: %v", err)
+	}
+	if len(c.Entries) == 0 {
+		t.Fatal("no source titles listed")
+	}
+	for _, e := range c.Entries {
+		if e.Installed {
+			t.Errorf("%s is marked installed with no drive configured", e.GameID)
+		}
+	}
+	var said bool
+	for _, w := range warnings {
+		if errors.Is(w, app.ErrNoDevice) {
+			said = true
+		}
+	}
+	if !said {
+		t.Errorf("no warning that there is no device: %v", warnings)
+	}
+}
