@@ -10,6 +10,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/apa"
 	"github.com/casmith/ps2hdd/internal/asset"
+	"github.com/casmith/ps2hdd/internal/asset/provider"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
@@ -18,6 +19,37 @@ import (
 )
 
 // AssetStatus reports artwork completeness for the installed library.
+// WantedAndUnavailable splits the configured art slots into those the current
+// provider can supply and those it cannot.
+//
+// Reporting on a slot no provider can fill is worse than not reporting it: it
+// is a column of "no" that never becomes "yes", and it drags the completeness
+// count to zero however healthy the library is. Those slots are named once,
+// as a setup note, rather than per game.
+//
+// If the provider cannot be constructed at all, everything is reported as
+// wanted; that failure is surfaced elsewhere and must not silently shrink the
+// report here.
+func (s *Services) WantedAndUnavailable() (want, unavailable []model.AssetType) {
+	all := s.Config.WantedAssets()
+	p, err := s.AssetProvider()
+	if err != nil {
+		return all, nil
+	}
+	unsupported := map[model.AssetType]bool{}
+	for _, t := range provider.Unsupported(p, all) {
+		unsupported[t] = true
+	}
+	for _, t := range all {
+		if unsupported[t] {
+			unavailable = append(unavailable, t)
+			continue
+		}
+		want = append(want, t)
+	}
+	return want, unavailable
+}
+
 func (s *Services) AssetStatus(ctx context.Context, games []model.Game) ([]asset.StatusRow, error) {
 	if games == nil {
 		// A PS1 listing failure must not hide the PS2 games' artwork status:
@@ -38,7 +70,8 @@ func (s *Services) AssetStatus(ctx context.Context, games []model.Game) ([]asset
 		if err != nil {
 			return err
 		}
-		rows = asset.Status(games, inv, s.Config.WantedAssets())
+		want, _ := s.WantedAndUnavailable()
+		rows = asset.Status(games, inv, want)
 		return nil
 	})
 	return rows, missingTool(err, external.PFSFuseTool, "Artwork status")
@@ -84,6 +117,13 @@ func (s *Services) SyncAssets(ctx context.Context, games []model.Game, opts Sync
 		}
 		if s.DryRun {
 			return nil
+		}
+		// One clear failure beats one per file. A mount that will not take a
+		// probe byte will not take any of the artwork either, and finding
+		// that out now means the report names the cause instead of repeating
+		// the same errno against thirty different paths.
+		if err := asset.CheckWritable(mp); err != nil {
+			return err
 		}
 		// Ensure the OPL directories exist before writing into them; a fresh
 		// +OPL partition has neither ART nor CFG.

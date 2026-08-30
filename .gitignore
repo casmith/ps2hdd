@@ -7,3 +7,7 @@
 *.img
 *.vcd
 *.partial
+
+# hdl_dump writes an info.sys into the working directory when it installs a
+# game with HDD OSD attributes. It is drive state, not source.
+/info.sys

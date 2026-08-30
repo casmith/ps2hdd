@@ -57,12 +57,20 @@ verify_after_install = true
 [assets]
 # Artwork provider.
 #
+#   opl-art     the OPL Manager GameArt Database, mirrored on GitHub. Front and
+#               back covers, the disc image, the spine, logos, backgrounds and
+#               screenshots -- PNG, already at OPL's exact pixel sizes. This is
+#               the default and the only source that can fill every slot below.
 #   ps2-covers  front covers from the community databases PCSX2 and DuckStation
-#               use. Covers only; other slots are reported as unavailable
-#               rather than filled with a substitute.
+#               use. High-resolution JPEG, front cover only; every other slot
+#               is reported as unavailable rather than filled with a substitute.
 #   local       a directory on this machine (see mirror below).
 #   http        URL templates you supply (see [assets.templates] below).
-provider = "ps2-covers"
+#
+# Enabling a slot your provider cannot supply is the one way to make a healthy
+# library report as permanently incomplete. `ps2hdd doctor` names any such slot
+# under "Not supplied".
+provider = "opl-art"
 
 # A local artwork collection. When set alongside a remote provider it is tried
 # first, so hand-curated art always wins.
@@ -75,23 +83,30 @@ provider = "ps2-covers"
 # Which slots to keep in sync. Each maps to a file in +OPL/ART named
 # <serial>_<TYPE>.png, except config, which is +OPL/CFG/<serial>.cfg.
 #
-#   covers       COV (front) and COV2 (back)
-#   spines       LAB
-#   backgrounds  BG   640x480
-#   screenshots  SCR and SCR2   250x188
-#   icons        ICO  64x64
-#   logos        LGO  300x125
-#   config       the per-game OPL settings file
+#   covers       COV   140x200   front cover
+#   back_covers  COV2  242x344   back cover
+#   discs        ICO   64x64     the disc itself. OPL Manager calls this slot
+#                                "Disc"; it was named `icons` in older versions
+#                                of this file and that spelling is still read.
+#   spines       LAB   18x240    the spine strip down the side of the case
+#   backgrounds  BG    640x480
+#   screenshots  SCR and SCR2    250x188
+#   logos        LGO   300x125
+#   config       the per-game OPL settings file. No database can generate one,
+#                so leave it off unless you keep a local mirror of your own.
 #
-# Only the slots your provider can actually supply are worth enabling; the
-# others will simply be reported as missing. `ps2hdd art sync` says which.
+# Whatever the source serves is re-encoded to PNG and scaled to the sizes above
+# on the way in: OPL picks its decoder from the filename, and its slots have
+# exact dimensions that a source ignoring them renders badly or not at all. Art
+# that already matches is copied through untouched.
 covers      = true
+back_covers = true
+discs       = true
 spines      = false
 backgrounds = false
 screenshots = false
-icons       = false
 logos       = false
-config      = true
+config      = false
 
 # URL templates for the "http" provider. Placeholders:
 #

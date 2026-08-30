@@ -1,13 +1,20 @@
 package asset
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"  // registered so a GIF from an odd mirror still converts
+	_ "image/jpeg" // the xlenore cover databases serve JPEG
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
+
+	"golang.org/x/image/draw"
 
 	"github.com/casmith/ps2hdd/internal/asset/provider"
 	"github.com/casmith/ps2hdd/internal/logging"
@@ -209,14 +216,28 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 	}
 	defer in.Close()
 
-	// PFS via FUSE does not always support rename, so the destination is
-	// written directly. A failed write is removed rather than left as a
-	// truncated image OPL would try to draw.
-	out, err := os.Create(item.Dest)
+	// The destination is removed before it is written, never truncated.
+	//
+	// os.Create is O_RDWR|O_CREAT|O_TRUNC, and O_TRUNC on a file that already
+	// exists makes the kernel ask the filesystem to truncate it. pfsfuse
+	// implements ftruncate but not truncate, so that request comes back
+	// ENOSYS -- "function not implemented" -- and the result is that every
+	// first write to a slot succeeds and every overwrite fails. Unlinking
+	// asks for nothing pfsfuse does not implement.
+	//
+	// PFS via FUSE does not always support rename, so there is no write-aside
+	// and swap: the old file goes before the new one arrives. A failed write
+	// is removed rather than left as a truncated image OPL would try to draw,
+	// which means an interrupted overwrite leaves the slot empty rather than
+	// stale. Empty is the better of the two -- the next sync fills it.
+	if err := os.Remove(item.Dest); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return 0, fmt.Errorf("replace %s: %w", filepath.Base(item.Dest), err)
+	}
+	out, err := os.OpenFile(item.Dest, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return 0, err
 	}
-	n, err := io.Copy(out, in)
+	n, err := writeForOPL(out, in, item.Game.Platform, item.Type)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
@@ -225,6 +246,92 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// writeForOPL writes the asset to out as a PNG at the size OPL expects.
+//
+// Two things have to be true of the file that lands on the HDD, and neither is
+// true of everything a provider serves.
+//
+// It has to be a PNG. Art files are named <serial>_COV.png and OPL picks its
+// decoder from that extension, so a JPEG copied byte-for-byte into that name
+// is a file the console cannot draw. The xlenore collections PCSX2 uses are
+// all JPEG.
+//
+// It has to be the documented size. OPL's art slots have exact dimensions --
+// 140x200 for a PS2 front cover, 64x64 for the disc -- and a source that
+// ignores them produces art that renders inconsistently or not at all: the
+// xlenore covers are 512x736, which is thirteen times the pixels of the slot
+// they are being written into, on a console with 32 MB of RAM. Whatever the
+// source gives is scaled to the slot. model.Dimensions is the authority, and
+// a slot it does not pin is written through at its natural size.
+//
+// CFG entries are text and are copied untouched.
+func writeForOPL(out io.Writer, in io.Reader, platform model.Platform, t model.AssetType) (int64, error) {
+	if t == model.AssetConfig {
+		return io.Copy(out, in)
+	}
+
+	head := make([]byte, len(pngMagic))
+	nRead, err := io.ReadFull(in, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, err
+	}
+	body := io.MultiReader(bytes.NewReader(head[:nRead]), in)
+	isPNG := nRead == len(pngMagic) && bytes.Equal(head, pngMagic)
+
+	want, pinned := model.Dimensions(platform, t)
+
+	// A PNG already at the right size is copied through untouched, which keeps
+	// a database built for OPL byte-identical to what it published.
+	if isPNG && !pinned {
+		return io.Copy(out, body)
+	}
+	if isPNG {
+		buf, err := io.ReadAll(body)
+		if err != nil {
+			return 0, err
+		}
+		if cfg, err := png.DecodeConfig(bytes.NewReader(buf)); err == nil &&
+			cfg.Width == want.Width && cfg.Height == want.Height {
+			return io.Copy(out, bytes.NewReader(buf))
+		}
+		body = bytes.NewReader(buf)
+	}
+
+	img, format, err := image.Decode(body)
+	if err != nil {
+		return 0, fmt.Errorf("the artwork is neither PNG nor a format that could be decoded: %w", err)
+	}
+	if pinned {
+		b := img.Bounds()
+		if b.Dx() != want.Width || b.Dy() != want.Height {
+			scaled := image.NewRGBA(image.Rect(0, 0, want.Width, want.Height))
+			// CatmullRom because most of this work is downscaling a cover by a
+			// large factor, where a cheaper kernel loses the cover text.
+			draw.CatmullRom.Scale(scaled, scaled.Bounds(), img, b, draw.Over, nil)
+			img = scaled
+		}
+	}
+	counter := &countingWriter{w: out}
+	if err := png.Encode(counter, img); err != nil {
+		return 0, fmt.Errorf("re-encode %s artwork as PNG: %w", format, err)
+	}
+	return counter.n, nil
+}
+
+// pngMagic is the PNG signature.
+var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // StatusRow is one line of `ps2hdd art status`.

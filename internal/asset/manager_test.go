@@ -1,7 +1,12 @@
 package asset_test
 
 import (
+	"bytes"
 	"context"
+	"image"
+	"image/color"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +16,43 @@ import (
 	"github.com/casmith/ps2hdd/internal/asset/provider"
 	"github.com/casmith/ps2hdd/internal/model"
 )
+
+// pngBytes is a real PNG at the PS2 front-cover size.
+//
+// Art fixtures have to be decodable images: installing re-encodes anything
+// that is not already PNG, because the destination filename claims PNG and OPL
+// picks its decoder from that. They also have to be the right size for their
+// slot, or installing scales them and a byte comparison against the source
+// stops meaning anything.
+func pngBytes(t *testing.T) []byte {
+	t.Helper()
+	return pngBytesAt(t, 140, 200)
+}
+
+// jpegBytes is a real JPEG at the size the xlenore cover databases serve,
+// which is nothing like the slot it has to be written into.
+func jpegBytes(t *testing.T) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, 512, 736))
+	img.Set(0, 0, color.RGBA{R: 200, G: 100, B: 50, A: 255})
+	if err := jpeg.Encode(&buf, img, nil); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// pngBytesAt is a real PNG of a given size.
+func pngBytesAt(t *testing.T, w, h int) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	img := image.NewRGBA(image.Rect(0, 0, w, h))
+	img.Set(0, 0, color.RGBA{R: 1, G: 2, B: 3, A: 255})
+	if err := png.Encode(&buf, img); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
 
 func newLocalManager(t *testing.T, mirror string, want []model.AssetType, overwrite bool) *asset.Manager {
 	t.Helper()
@@ -27,11 +69,8 @@ func newLocalManager(t *testing.T, mirror string, want []model.AssetType, overwr
 
 func TestPlanAndApplySync(t *testing.T) {
 	mirror := t.TempDir()
-	for name, body := range map[string]string{
-		"SLUS_210.50_COV.png": "cover-bytes",
-		"SLUS_210.50_BG.png":  "background-bytes",
-	} {
-		if err := os.WriteFile(filepath.Join(mirror, name), []byte(body), 0o600); err != nil {
+	for _, name := range []string{"SLUS_210.50_COV.png", "SLUS_210.50_BG.png"} {
+		if err := os.WriteFile(filepath.Join(mirror, name), pngBytes(t), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -68,8 +107,8 @@ func TestPlanAndApplySync(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(got) != "cover-bytes" {
-		t.Errorf("installed cover = %q", got)
+	if !bytes.Equal(got, pngBytes(t)) {
+		t.Errorf("installed cover does not match the mirror copy (%d bytes)", len(got))
 	}
 	if res.Bytes == 0 {
 		t.Error("Bytes not accounted")
@@ -80,7 +119,7 @@ func TestPlanAndApplySync(t *testing.T) {
 // get it back.
 func TestSyncNeverOverwritesByDefault(t *testing.T) {
 	mirror := t.TempDir()
-	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), []byte("from-mirror"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), pngBytes(t), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	opl := t.TempDir()
@@ -124,15 +163,15 @@ func TestSyncNeverOverwritesByDefault(t *testing.T) {
 	if _, err := m2.Apply(context.Background(), plan2, nil); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := os.ReadFile(dest); string(got) != "from-mirror" {
-		t.Errorf("overwrite did not replace the file: %q", got)
+	if got, _ := os.ReadFile(dest); !bytes.Equal(got, pngBytes(t)) {
+		t.Errorf("overwrite did not replace the hand-picked file (%d bytes)", len(got))
 	}
 }
 
 func TestApplyReportsProgress(t *testing.T) {
 	mirror := t.TempDir()
 	for _, n := range []string{"SLUS_210.50_COV.png", "SLUS_215.03_COV.png"} {
-		if err := os.WriteFile(filepath.Join(mirror, n), []byte("x"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(mirror, n), pngBytes(t), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -242,3 +281,227 @@ func (r *sr) Read(p []byte) (int, error) {
 }
 
 func stringReader(s string) *sr { return &sr{s: s} }
+
+// A database that serves JPEG must not have its bytes copied into a file named
+// .png: OPL picks its decoder from the extension, so the console would be
+// handed a file it cannot draw. The bytes are re-encoded instead.
+func TestInstallConvertsJPEGToPNG(t *testing.T) {
+	mirror := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.jpg"), jpegBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opl := t.TempDir()
+	games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
+	want := []model.AssetType{model.AssetCover}
+
+	inv, err := asset.Scan(opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newLocalManager(t, mirror, want, false)
+	plan, err := m.PlanSync(context.Background(), games, inv, opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Apply(context.Background(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Installed) != 1 || len(res.Failed) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	got, err := os.ReadFile(filepath.Join(opl, "ART", "SLUS_210.50_COV.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, format, err := image.Decode(bytes.NewReader(got)); err != nil || format != "png" {
+		t.Errorf("installed file is %q (err %v), want png", format, err)
+	}
+}
+
+// Anything that is not a decodable image is refused rather than written: a
+// file OPL cannot draw is worse than an absent one, because it looks installed.
+func TestInstallRefusesUndecodableArt(t *testing.T) {
+	mirror := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), []byte("not an image"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opl := t.TempDir()
+	games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
+
+	inv, err := asset.Scan(opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newLocalManager(t, mirror, []model.AssetType{model.AssetCover}, false)
+	plan, err := m.PlanSync(context.Background(), games, inv, opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Apply(context.Background(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Installed) != 0 || len(res.Failed) != 1 {
+		t.Fatalf("result = %+v", res)
+	}
+	if _, err := os.Stat(filepath.Join(opl, "ART", "SLUS_210.50_COV.png")); !os.IsNotExist(err) {
+		t.Error("an undecodable file was left on the HDD")
+	}
+}
+
+// Overwriting must unlink the old file rather than truncate it.
+//
+// pfsfuse implements ftruncate but not truncate, so O_TRUNC on an existing
+// file comes back ENOSYS and every overwrite fails while every first write
+// succeeds. The mechanism is asserted through a hard link: truncating writes
+// through to every link, while unlinking and recreating leaves the other link
+// holding the original bytes. Inode numbers cannot be used for this -- a
+// filesystem is free to hand the freed inode straight back.
+func TestOverwriteReplacesTheFileRatherThanTruncatingIt(t *testing.T) {
+	mirror := t.TempDir()
+	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), pngBytes(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opl := t.TempDir()
+	dest := filepath.Join(opl, "ART", "SLUS_210.50_COV.png")
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const stale = "stale artwork"
+	if err := os.WriteFile(dest, []byte(stale), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	witness := filepath.Join(opl, "witness.bin")
+	if err := os.Link(dest, witness); err != nil {
+		t.Skipf("hard links unavailable here: %v", err)
+	}
+
+	games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
+	inv, err := asset.Scan(opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newLocalManager(t, mirror, []model.AssetType{model.AssetCover}, true)
+	plan, err := m.PlanSync(context.Background(), games, inv, opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := m.Apply(context.Background(), plan, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Installed) != 1 || len(res.Failed) != 0 {
+		t.Fatalf("result = %+v", res)
+	}
+
+	got, err := os.ReadFile(dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, pngBytes(t)) {
+		t.Errorf("overwrite did not install the new bytes (%d bytes)", len(got))
+	}
+	// The witness still holds the old bytes only if the old file was unlinked.
+	// Truncation would have emptied it and written the new image through it.
+	held, err := os.ReadFile(witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(held) != stale {
+		t.Errorf("the file was truncated in place; pfsfuse has no truncate and would refuse it.\nwitness holds %d bytes, want the original %q", len(held), stale)
+	}
+}
+
+// OPL's art slots have exact dimensions and a source that ignores them
+// produces art the console renders inconsistently or not at all. Whatever
+// arrives is scaled to the slot.
+func TestInstallScalesArtToTheSlotDimensions(t *testing.T) {
+	cases := []struct {
+		name  string
+		typ   model.AssetType
+		file  string
+		src   func(*testing.T) []byte
+		wantW int
+		wantH int
+	}{
+		// A 512x736 JPEG is what the xlenore databases serve for a cover.
+		{"oversized jpeg cover", model.AssetCover, "SLUS_210.50_COV.png", jpegBytes, 140, 200},
+		// A PNG of the wrong size is scaled too, whatever its source.
+		{"wrong-size png disc", model.AssetIcon, "SLUS_210.50_ICO.png",
+			func(t *testing.T) []byte { return pngBytesAt(t, 128, 128) }, 64, 64},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			mirror := t.TempDir()
+			// The mirror keeps the source under the OPL name; the extension
+			// says nothing about the bytes inside.
+			if err := os.WriteFile(filepath.Join(mirror, tc.file), tc.src(t), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			opl := t.TempDir()
+			games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
+			inv, err := asset.Scan(opl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m := newLocalManager(t, mirror, []model.AssetType{tc.typ}, false)
+			plan, err := m.PlanSync(context.Background(), games, inv, opl)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res, err := m.Apply(context.Background(), plan, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(res.Installed) != 1 || len(res.Failed) != 0 {
+				t.Fatalf("result = %+v", res)
+			}
+			got, err := os.ReadFile(filepath.Join(opl, "ART", tc.file))
+			if err != nil {
+				t.Fatal(err)
+			}
+			cfg, format, err := image.DecodeConfig(bytes.NewReader(got))
+			if err != nil {
+				t.Fatalf("installed file will not decode: %v", err)
+			}
+			if format != "png" {
+				t.Errorf("installed format = %q, want png", format)
+			}
+			if cfg.Width != tc.wantW || cfg.Height != tc.wantH {
+				t.Errorf("installed size = %dx%d, want %dx%d", cfg.Width, cfg.Height, tc.wantW, tc.wantH)
+			}
+		})
+	}
+}
+
+// A PNG already at the slot size is passed through untouched, so a database
+// built for OPL stays byte-identical to what it published.
+func TestInstallPassesCorrectlySizedPNGThrough(t *testing.T) {
+	mirror := t.TempDir()
+	src := pngBytesAt(t, 140, 200)
+	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), src, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	opl := t.TempDir()
+	games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
+	inv, err := asset.Scan(opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := newLocalManager(t, mirror, []model.AssetType{model.AssetCover}, false)
+	plan, err := m.PlanSync(context.Background(), games, inv, opl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.Apply(context.Background(), plan, nil); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(filepath.Join(opl, "ART", "SLUS_210.50_COV.png"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, src) {
+		t.Error("a correctly sized PNG was re-encoded rather than copied through")
+	}
+}

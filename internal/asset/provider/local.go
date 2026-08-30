@@ -40,6 +40,12 @@ func newLocal(o Options) (Provider, error) {
 
 func (p *local) Name() string { return "local" }
 
+// Supports is everything. A directory can hold any slot, so what is actually
+// there is a per-game question that Lookup answers by looking.
+func (p *local) Supports() []model.AssetType {
+	return append(append([]model.AssetType{}, model.ArtTypes...), model.AssetConfig)
+}
+
 // searchDirs are the places inside a mirror an asset might live: the mirror
 // root itself, and an ART or CFG subdirectory as found in a copied +OPL.
 func (p *local) searchDirs(t model.AssetType) []string {
