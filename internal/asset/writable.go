@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"syscall"
+
+	"github.com/casmith/ps2hdd/internal/pfs"
 )
 
 // CheckWritable confirms the mounted partition accepts a new file.
@@ -20,13 +22,9 @@ import (
 // exactly as it was found.
 func CheckWritable(mountpoint string) error {
 	probe := filepath.Join(mountpoint, ".ps2hdd-write-probe")
-	// Never O_TRUNC: pfsfuse has no truncate, so a probe left behind by an
-	// interrupted run would make this report the mount as unwritable when it
-	// is not. See the note in Manager.install.
-	if err := os.Remove(probe); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return writeProbeError(mountpoint, err)
-	}
-	f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	// A probe left behind by an interrupted run must not make this report a
+	// healthy mount as unwritable, which truncating it would. See internal/pfs.
+	f, err := pfs.Create(probe, 0o644)
 	if err != nil {
 		return writeProbeError(mountpoint, err)
 	}

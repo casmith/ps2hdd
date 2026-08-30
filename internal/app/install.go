@@ -15,6 +15,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
+	"github.com/casmith/ps2hdd/internal/pfs"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
 	"github.com/casmith/ps2hdd/internal/platform/ps2"
 )
@@ -510,13 +511,17 @@ func (s *Services) syncAssetsFor(ctx context.Context, games []model.Game) (int, 
 }
 
 // copyFile copies src to dest, removing a partial destination on failure.
+//
+// Both callers write into a PFS partition mounted over FUSE -- the POPS
+// runtime into __common, a converted VCD into __.POPS -- so the destination is
+// replaced rather than truncated. See internal/pfs.
 func copyFile(src, dest string) error {
 	in, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer in.Close()
-	out, err := os.Create(dest)
+	out, err := pfs.Create(dest, 0o644)
 	if err != nil {
 		return err
 	}
