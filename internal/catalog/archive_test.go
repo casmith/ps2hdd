@@ -11,6 +11,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/catalog"
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/iso9660/isosynth"
+	"github.com/casmith/ps2hdd/internal/model"
 )
 
 // sevenZip skips a test when no archive tool is installed, so the suite still
@@ -143,5 +144,135 @@ func TestFindImage(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("an archive with two images was accepted")
+	}
+}
+
+func TestFindPS1Members(t *testing.T) {
+	cases := map[string]struct {
+		entries   []external.ArchiveEntry
+		wantCue   string
+		wantData  string
+		wantCount int
+		wantErr   string
+	}{
+		"cue and one bin": {
+			entries: []external.ArchiveEntry{
+				{Name: "Zero Divide (USA).bin", SizeBytes: 411026112},
+				{Name: "Zero Divide (USA).cue", SizeBytes: 83},
+			},
+			wantCue: "Zero Divide (USA).cue", wantData: "Zero Divide (USA).bin", wantCount: 1,
+		},
+		// A multi-track rip: the data track is track 1, not whichever the
+		// archive listed first.
+		"multi-track picks track 1": {
+			entries: []external.ArchiveEntry{
+				{Name: "Zoop (USA) (Track 3).bin"},
+				{Name: "Zoop (USA) (Track 1).bin"},
+				{Name: "Zoop (USA) (Track 2).bin"},
+				{Name: "Zoop (USA).cue"},
+			},
+			wantCue: "Zoop (USA).cue", wantData: "Zoop (USA) (Track 1).bin", wantCount: 3,
+		},
+		"iso with no cue": {
+			entries:  []external.ArchiveEntry{{Name: "Game.iso"}},
+			wantCue:  "",
+			wantData: "Game.iso", wantCount: 1,
+		},
+		// The multi-part RAR sets some collections use: an archive of
+		// archives. Saying so beats "no disc image", which is true but sends
+		// the reader looking for the wrong thing.
+		"nested archive": {
+			entries: []external.ArchiveEntry{
+				{Name: "[SLUS_013.00] 007 Racing.part01.rar"},
+				{Name: "[SLUS_013.00] 007 Racing.part02.rar"},
+			},
+			wantErr: "nested archive",
+		},
+		"nothing usable": {
+			entries: []external.ArchiveEntry{{Name: "readme.txt"}},
+			wantErr: "no disc image",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			m, err := catalog.FindPS1Members(tc.entries)
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want one mentioning %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("FindPS1Members: %v", err)
+			}
+			if m.Cue != tc.wantCue {
+				t.Errorf("cue = %q, want %q", m.Cue, tc.wantCue)
+			}
+			if m.Data.Name != tc.wantData {
+				t.Errorf("data = %q, want %q", m.Data.Name, tc.wantData)
+			}
+			if m.DataCount != tc.wantCount {
+				t.Errorf("count = %d, want %d", m.DataCount, tc.wantCount)
+			}
+		})
+	}
+}
+
+// A PS1 library is very often entirely archived, so the scan has to look
+// inside them or find almost nothing.
+func TestScanPS1FindsGamesInsideArchives(t *testing.T) {
+	sevenZip(t)
+	root := t.TempDir()
+	work := t.TempDir()
+
+	data, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: "ZERODIVIDE",
+		CDXA:     true,
+		Files:    map[string][]byte{"SYSTEM.CNF": isosynth.PS1SystemCNF("SLUS_001.83")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const stem = "Zero Divide (USA)"
+	if err := os.WriteFile(filepath.Join(work, stem+".bin"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cue := "FILE \"" + stem + ".bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"
+	if err := os.WriteFile(filepath.Join(work, stem+".cue"), []byte(cue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, stem+".zip")
+	cmd := exec.Command(sevenZip(t), "a", "-mx=0", "-y", archive, ".")
+	cmd.Dir = work
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build archive: %v\n%s", err, out)
+	}
+
+	s := catalog.NewScanner(catalog.NewMemoryCache(), &external.ExecRunner{})
+	res, err := s.ScanPS1(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ScanPS1: %v", err)
+	}
+	if len(res.Problems) > 0 {
+		t.Fatalf("problems: %+v", res.Problems)
+	}
+	if len(res.Games) != 1 {
+		t.Fatalf("got %d games, want 1: %+v", len(res.Games), res.Games)
+	}
+	g := res.Games[0]
+	if g.GameID != "SLUS_001.83" {
+		t.Errorf("GameID = %q", g.GameID)
+	}
+	if g.Platform != model.PlatformPS1 {
+		t.Errorf("platform = %q", g.Platform)
+	}
+	// The cuesheet is the member handed on, because that is what the
+	// converter reads.
+	if filepath.Ext(g.ArchiveMember) != ".cue" {
+		t.Errorf("ArchiveMember = %q, want the cuesheet", g.ArchiveMember)
+	}
+	// The size is the data track's, not the compressed container's.
+	if g.SizeBytes != int64(len(data)) {
+		t.Errorf("SizeBytes = %d, want %d", g.SizeBytes, len(data))
 	}
 }

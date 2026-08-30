@@ -31,7 +31,8 @@ device = "/dev/disk/by-id/ata-WDC_WD1200JB-00REA0_WD-WCANM1234567"
 #      enough for the volume descriptor and the root directory. Installing one
 #      does unpack it -- see install.scratch_dir below.
 # PS1: *.cue preferred, with the .bin it names ignored as a separate entry.
-#      Multi-disc titles are grouped automatically.
+#      Multi-disc titles are grouped automatically. Archives are read too, the
+#      same way: a cuesheet plus its data track, identified without unpacking.
 ps2 = "/mnt/nas/games/ps2"
 ps1 = "/mnt/nas/games/psx"
 

@@ -87,3 +87,25 @@ func FindGameID(s string) string {
 	}
 	return OPLGameID(m[1] + m[2] + m[3])
 }
+
+// bootFileName matches a boot file exactly as a disc's root directory writes
+// it: four letters, an underscore, three digits, a dot, two digits, and the
+// ISO 9660 version suffix.
+//
+// FindGameID is deliberately looser -- it has to find a serial inside a name
+// somebody typed -- and that looseness is wrong against a machine-written
+// directory listing, where it also matches data files.
+var bootFileName = regexp.MustCompile(`^([A-Z]{4})_([0-9]{3})\.([0-9]{2})(;[0-9]+)?$`)
+
+// BootFileSerial returns the serial a root-directory entry names, or "".
+//
+// Both consoles put it there: a PS2 disc carries SLUS_202.16;1 as its boot
+// ELF, a PS1 disc carries SLUS_000.01;1 next to SYSTEM.CNF. It is what makes a
+// disc identifiable when SYSTEM.CNF itself is out of reach.
+func BootFileSerial(name string) string {
+	m := bootFileName.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(name)))
+	if m == nil {
+		return ""
+	}
+	return OPLGameID(m[1] + m[2] + m[3])
+}

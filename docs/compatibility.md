@@ -238,9 +238,21 @@ multi-disc title, so grouping is by directory and base title instead, and each
 disc keeps its own serial. The first disc's serial becomes the title's
 identity, which is what OPL and POPStarter key artwork off.
 
-**Archived sources are read without unpacking.** A `.7z`, `.zip` or `.rar`
-holding one disc image is identified from the first 16 MiB of that image, which
-covers the ISO 9660 volume descriptor and the root directory. The serial comes
+**Archived sources are read without unpacking, on both platforms.** A `.7z`,
+`.zip` or `.rar` is identified from the first 16 MiB of its disc image, which
+covers the ISO 9660 volume descriptor and the root directory.
+
+A PS1 rip is not one file the way a PS2 rip is: it is a cuesheet plus one or
+more data tracks, so the cuesheet is read in full first -- it is a few hundred
+bytes, and it decides whether the rip is usable at all. A split dump is
+rejected there, before any track is decompressed. Installing extracts the whole
+archive rather than the named member, because the `FILE` line names its track
+by bare filename and the two have to land in the same directory.
+
+An archive whose members are all archives is reported as such. Some collections
+nest a multi-part RAR set inside an outer RAR; ps2hdd does not unpack those, and
+says so rather than reporting "no disc image", which is true but sends the
+reader looking for the wrong thing. The serial comes
 from `SYSTEM.CNF` when it is reachable, and otherwise from the boot ELF in the
 root directory, which every PS2 disc names for its serial. That second route is
 allowed only for a partial read: with the whole image available there is no

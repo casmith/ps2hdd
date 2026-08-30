@@ -179,3 +179,33 @@ func TestArchiveArgs(t *testing.T) {
 		t.Errorf("ExtractArgs = %q", got)
 	}
 }
+
+// The error a user sees must be what went wrong, not a copyright notice.
+// 7-Zip prints four lines of preamble before "ERRORS:" and the real message.
+func TestToolErrorSurfacesTheRealMessage(t *testing.T) {
+	const sevenZipOutput = `7-Zip 26.02 (x64) : Copyright (c) 1999-2026 Igor Pavlov : 2026-06-25
+ 64-bit locale=en_US.UTF-8 Threads:16 OPEN_MAX:524288, ASM
+Scanning the drive for archives:
+1 file, 53075149 bytes (51 MiB)
+Listing archive: /games/Assault Rigs.rar
+ERRORS:
+Unexpected end of archive
+WARNINGS:
+There are data after the end of archive
+`
+	err := &ToolError{Tool: "7z", Err: errors.New("exit status 2"), Stdout: sevenZipOutput}
+	got := err.Error()
+	if !strings.Contains(got, "Unexpected end of archive") {
+		t.Errorf("error does not carry 7z's message:\n%s", got)
+	}
+	if strings.Contains(got, "Copyright") {
+		t.Errorf("error leads with the banner:\n%s", got)
+	}
+
+	// A tool with no heading still gets its first real line through.
+	plain := &ToolError{Tool: "pfsfuse", Err: errors.New("exit status 1"),
+		Stderr: "hdd: PS2 APA Driver v2.5 (c) 2003 Vector\n(!) hdd0:+OPL: No such file or directory.\n"}
+	if !strings.Contains(plain.Error(), "No such file or directory") {
+		t.Errorf("error does not carry pfsfuse's message:\n%s", plain.Error())
+	}
+}

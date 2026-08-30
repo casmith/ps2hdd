@@ -140,25 +140,9 @@ func InspectAt(r io.ReaderAt, size int64, name string, partial bool) (Image, err
 	return img, nil
 }
 
-// bootELFName matches a PS2 boot ELF exactly as the console's naming
-// convention writes it: four letters, an underscore, three digits, a dot, two
-// digits, and the ISO 9660 version suffix.
-//
-// model.FindGameID is deliberately looser -- it has to find a serial inside a
-// filename someone typed -- and that looseness is wrong here. A root directory
-// listing is machine-written, so the strict form is available, and accepting
-// less means matching data files: one real rip has both SLUS_212.81 and a
-// NA_715.74 at its root, and the loose pattern claims both.
-var bootELFName = regexp.MustCompile(`^([A-Z]{4})_([0-9]{3})\.([0-9]{2})(;[0-9]+)?$`)
-
 // bootELFSerial returns the serial a root-directory entry names, or "".
-func bootELFSerial(name string) string {
-	m := bootELFName.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(name)))
-	if m == nil {
-		return ""
-	}
-	return model.OPLGameID(m[1] + m[2] + m[3])
-}
+// See model.BootFileSerial for why the strict form matters here.
+func bootELFSerial(name string) string { return model.BootFileSerial(name) }
 
 // openVolume tries the two sector layouts a PS2 rip can have.
 //
