@@ -159,3 +159,74 @@ func (s *Services) ScratchRoot() (string, error) {
 	}
 	return filepath.Join(cache, "scratch"), nil
 }
+
+// extractPS1Source unpacks an archived PS1 rip and returns discs pointing at
+// the extracted files.
+//
+// Unlike a PS2 image, a PS1 rip is more than one file: the cuesheet names the
+// data track, and the converter reads both. They are extracted together into
+// the same directory so the bare filename in the FILE line resolves.
+func (s *Services) extractPS1Source(ctx context.Context, g model.Game, opts InstallOptions) ([]model.Disc, func(), error) {
+	log := logging.ContextLogger(ctx)
+	a := external.Archive{Runner: s.Runner}
+	if _, ok := a.Available(); !ok {
+		return nil, nil, &MissingToolError{
+			Tool:    external.SevenZipTool,
+			Feature: fmt.Sprintf("Installing %s, which is inside an archive", g.Title),
+		}
+	}
+
+	root, err := s.ScratchRoot()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, nil, fmt.Errorf("create the scratch directory %s: %w", root, err)
+	}
+	// A PS1 disc plus the VCD it converts into both live here at once.
+	need := g.SizeBytes*2 + scratchHeadroom
+	if free, err := freeSpace(root); err == nil && free < need {
+		return nil, nil, fmt.Errorf(
+			"%s needs %s of scratch space to unpack and convert in %s, which has %s free.\n"+
+				"Set install.scratch_dir to a directory with more room",
+			g.Title, model.HumanSize(need), root, model.HumanSize(free))
+	}
+
+	dir, err := os.MkdirTemp(root, "ps1-")
+	if err != nil {
+		return nil, nil, err
+	}
+	cleanup := func() {
+		if err := os.RemoveAll(dir); err != nil {
+			log.Warn("could not remove the scratch directory", "dir", dir, "err", err)
+		}
+	}
+
+	opts.OnProgress.report(StageExtracting, -1, fmt.Sprintf("unpacking %s", filepath.Base(g.SourcePath)))
+
+	// Everything is taken out, not just the named member: a cuesheet is
+	// useless without the track it names, and a rip's data files are the only
+	// other things in these archives.
+	if err := a.ExtractAll(ctx, g.SourcePath, dir); err != nil {
+		cleanup()
+		return nil, nil, fmt.Errorf("extract %s: %w", filepath.Base(g.SourcePath), err)
+	}
+
+	discs := append([]model.Disc(nil), g.Discs...)
+	for i := range discs {
+		member := discs[i].ArchiveMember
+		if member == "" {
+			member = g.ArchiveMember
+		}
+		p := filepath.Join(dir, filepath.Base(member))
+		if _, err := os.Stat(p); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("%s was not written by the extraction of %s",
+				filepath.Base(member), filepath.Base(g.SourcePath))
+		}
+		discs[i].SourcePath = p
+		discs[i].ArchiveMember = ""
+	}
+	log.Info("extracted archived PS1 source", "archive", g.SourcePath, "into", dir)
+	return discs, cleanup, nil
+}

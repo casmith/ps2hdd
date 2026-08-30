@@ -194,3 +194,25 @@ func (a Archive) Extract(ctx context.Context, archive, inner, destDir string) (s
 	}
 	return filepath.Join(destDir, filepath.Base(inner)), nil
 }
+
+// ExtractAllArgs builds the argument vector that extracts every member into a
+// directory, flattening any structure.
+func ExtractAllArgs(archive, destDir string) []string {
+	return []string{"e", "-y", "-o" + destDir, archive}
+}
+
+// ExtractAll writes every file in the archive into destDir.
+//
+// A PS1 rip is a cuesheet plus one or more data tracks, and the cuesheet names
+// its track by bare filename, so they have to land together. Pulling members
+// out one at a time would mean parsing the sheet first to learn what to ask
+// for, which is more moving parts for no gain: these archives hold a rip and
+// nothing else.
+func (a Archive) ExtractAll(ctx context.Context, archive, destDir string) error {
+	tool, err := a.Tool()
+	if err != nil {
+		return err
+	}
+	_, err = a.Runner.Run(ctx, Command{Name: tool, Args: ExtractAllArgs(archive, destDir)})
+	return err
+}

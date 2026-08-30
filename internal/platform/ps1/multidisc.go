@@ -101,9 +101,10 @@ func Group(discs []Disc, sourceRoot string) []model.Game {
 		})
 
 		g := model.Game{
-			Platform:   model.PlatformPS1,
-			GameID:     group[0].GameID,
-			SourcePath: group[0].SourcePath(),
+			Platform:      model.PlatformPS1,
+			GameID:        group[0].GameID,
+			SourcePath:    group[0].SourcePath(),
+			ArchiveMember: group[0].ArchiveMember,
 		}
 		g.Title = displayTitle(group, k.dir, sourceRoot)
 		for i, d := range group {
@@ -112,11 +113,12 @@ func Group(discs []Disc, sourceRoot string) []model.Game {
 				n = i + 1
 			}
 			g.Discs = append(g.Discs, model.Disc{
-				Number:     n,
-				GameID:     d.GameID,
-				Title:      d.Title,
-				SourcePath: d.SourcePath(),
-				SizeBytes:  d.SizeBytes,
+				Number:        n,
+				ArchiveMember: d.ArchiveMember,
+				GameID:        d.GameID,
+				Title:         d.Title,
+				SourcePath:    d.SourcePath(),
+				SizeBytes:     d.SizeBytes,
 			})
 			g.SizeBytes += d.SizeBytes
 		}

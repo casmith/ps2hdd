@@ -11,6 +11,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/model"
+	"github.com/casmith/ps2hdd/internal/platform/ps1"
 	"github.com/casmith/ps2hdd/internal/platform/ps2"
 )
 
@@ -138,4 +139,150 @@ func extensionList(m map[string]bool) string {
 	}
 	sort.Strings(out)
 	return strings.Join(out, ", ")
+}
+
+// cueExtension is the PS1 entry point inside an archive.
+const cueExtension = ".cue"
+
+// PS1Members names the files that make up a PS1 rip inside an archive.
+type PS1Members struct {
+	// Cue is the cuesheet, or "" for a rip that ships without one.
+	Cue string
+	// Data is the track the volume descriptor lives in: the single BIN, or
+	// the first of a multi-track set.
+	Data external.ArchiveEntry
+	// DataCount is how many data files the archive holds. More than one is a
+	// split dump, which POPS cannot represent.
+	DataCount int
+}
+
+// FindPS1Members picks the cuesheet and data track out of an archive listing.
+//
+// A PS1 rip is not one file the way a PS2 rip is: it is a cuesheet plus one
+// or more BINs, so FindImage's insistence on exactly one image is wrong here.
+func FindPS1Members(entries []external.ArchiveEntry) (PS1Members, error) {
+	var m PS1Members
+	var data []external.ArchiveEntry
+	archives := 0
+	for _, e := range entries {
+		ext := strings.ToLower(filepath.Ext(e.Name))
+		switch {
+		case ext == cueExtension:
+			if m.Cue == "" {
+				m.Cue = e.Name
+			}
+		case imageExtensions[ext]:
+			data = append(data, e)
+		case external.IsArchive(e.Name):
+			archives++
+		}
+	}
+	// An archive of archives is a packaging style this does not unpack: the
+	// multi-part RAR sets in some collections nest a whole split archive
+	// inside an outer one. Saying so beats reporting "no disc image", which
+	// is true but sends the reader looking for the wrong thing.
+	if len(data) == 0 && archives > 0 {
+		return m, fmt.Errorf("holds %d nested archive(s) rather than a disc image; unpack the outer archive first", archives)
+	}
+	if len(data) == 0 {
+		return m, fmt.Errorf("holds no disc image (looked for %s)", extensionList(imageExtensions))
+	}
+	// Sorted so a multi-track set yields track 1 rather than whichever the
+	// archive happened to list first.
+	sort.Slice(data, func(i, j int) bool { return data[i].Name < data[j].Name })
+	m.Data = data[0]
+	m.DataCount = len(data)
+	return m, nil
+}
+
+// InspectArchivedPS1 identifies the PS1 rip inside an archive without
+// extracting it.
+func InspectArchivedPS1(ctx context.Context, a external.Archive, archivePath string) (model.Game, error) {
+	entries, err := a.List(ctx, archivePath)
+	if err != nil {
+		return model.Game{}, err
+	}
+	m, err := FindPS1Members(entries)
+	if err != nil {
+		return model.Game{}, fmt.Errorf("%s %w", filepath.Base(archivePath), err)
+	}
+
+	// The cuesheet is a few hundred bytes and decides whether the rip is
+	// usable at all, so it is read in full.
+	var cueText string
+	if m.Cue != "" {
+		b, err := readMember(ctx, a, archivePath, m.Cue, 1<<20)
+		if err != nil {
+			return model.Game{}, err
+		}
+		cueText = string(b)
+	} else if m.DataCount > 1 {
+		return model.Game{}, fmt.Errorf("%s holds %d data tracks and no cuesheet, so the track order is unknown",
+			filepath.Base(archivePath), m.DataCount)
+	}
+
+	// The cuesheet decides usability, and checking it first is what keeps a
+	// large library scannable: a split dump is rejected here for a few hundred
+	// bytes instead of after decompressing megabytes of a track that was
+	// never going to be installable. InspectReader checks it again, which
+	// costs nothing and keeps it correct when called directly.
+	if cueText != "" {
+		c, err := ps1.ParseCue(strings.NewReader(cueText))
+		if err != nil {
+			return model.Game{}, fmt.Errorf("%s: %w", filepath.Base(archivePath), err)
+		}
+		if err := c.Validate(); err != nil {
+			return model.Game{}, fmt.Errorf("%s: %w", filepath.Base(archivePath), err)
+		}
+	}
+
+	head, err := readMember(ctx, a, archivePath, m.Data.Name, headBytes)
+	if err != nil {
+		return model.Game{}, err
+	}
+	d, err := ps1.InspectReader(cueText, m.Data.Name, bytes.NewReader(head), m.Data.SizeBytes)
+	if err != nil {
+		return model.Game{}, err
+	}
+
+	// The archive is the source; the cuesheet is the member to hand on,
+	// because that is what the converter reads.
+	member := m.Cue
+	if member == "" {
+		member = m.Data.Name
+	}
+	g := model.Game{
+		Platform:      model.PlatformPS1,
+		Title:         d.Title,
+		GameID:        d.GameID,
+		SizeBytes:     d.SizeBytes,
+		SourcePath:    archivePath,
+		ArchiveMember: member,
+		Discs: []model.Disc{{
+			Number:        d.DiscNumber,
+			GameID:        d.GameID,
+			Title:         d.Title,
+			SourcePath:    archivePath,
+			ArchiveMember: member,
+			SizeBytes:     d.SizeBytes,
+		}},
+	}
+	return g, nil
+}
+
+// readMember decompresses at most limit bytes of one archive member.
+func readMember(ctx context.Context, a external.Archive, archivePath, member string, limit int64) ([]byte, error) {
+	var out []byte
+	err := a.Stream(ctx, archivePath, member, func(r io.Reader) error {
+		b, err := io.ReadAll(io.LimitReader(r, limit))
+		if err != nil {
+			return err
+		}
+		out = b
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("read %s from %s: %w", member, filepath.Base(archivePath), err)
+	}
+	return out, nil
 }

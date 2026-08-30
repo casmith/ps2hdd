@@ -48,6 +48,21 @@ var ps2ScanExtensions = func() map[string]bool {
 // .bin it references, and a .bin named by a .cue is never listed separately.
 var ps1Extensions = map[string]bool{".cue": true, ".bin": true, ".img": true, ".iso": true}
 
+// ps1ScanExtensions is what the PS1 walk collects: loose entry points plus the
+// archives that hold one. A PS1 library is very often entirely archived --
+// 2,097 of 2,103 files in the collection this was built against -- so treating
+// archives as invisible meant finding six titles in a library of two thousand.
+var ps1ScanExtensions = func() map[string]bool {
+	m := map[string]bool{}
+	for e := range ps1Extensions {
+		m[e] = true
+	}
+	for _, e := range []string{".7z", ".zip", ".rar"} {
+		m[e] = true
+	}
+	return m
+}()
+
 // ScanResult is the outcome of scanning one source directory.
 type ScanResult struct {
 	Root  string       `json:"root"`
@@ -145,12 +160,20 @@ func (s *Scanner) ScanPS1(ctx context.Context, root string) (ScanResult, error) 
 	if err != nil {
 		return res, err
 	}
-	files, err := s.collect(root, ps1Extensions, referenced)
+	files, err := s.collect(root, ps1ScanExtensions, referenced)
 	if err != nil {
 		return res, err
 	}
 
+	_, haveArchiveTool := s.Archive.Available()
 	outcomes := s.inspectAll(ctx, files, func(path string) (model.Game, error) {
+		if external.IsArchive(path) {
+			if !haveArchiveTool {
+				return model.Game{}, fmt.Errorf("%s is an archive; install %s to read inside it",
+					filepath.Base(path), external.SevenZipTool)
+			}
+			return InspectArchivedPS1(ctx, s.Archive, path)
+		}
 		d, err := ps1.Inspect(path)
 		if err != nil {
 			return model.Game{}, err
@@ -191,9 +214,16 @@ func (s *Scanner) ScanPS1(ctx context.Context, root string) (ScanResult, error) 
 		if len(o.game.Discs) > 0 {
 			d.DiscNumber = o.game.Discs[0].Number
 		}
-		if strings.EqualFold(filepath.Ext(o.path), ".cue") {
+		switch {
+		case o.game.ArchiveMember != "":
+			// Grouping rebuilds games from discs, so the archive has to
+			// travel on the disc or it is lost in the round trip and the
+			// install path cannot know there is anything to extract.
+			d.ArchivePath = o.path
+			d.ArchiveMember = o.game.ArchiveMember
+		case strings.EqualFold(filepath.Ext(o.path), ".cue"):
 			d.CuePath = o.path
-		} else {
+		default:
 			d.BinPath = o.path
 		}
 		discs = append(discs, d)

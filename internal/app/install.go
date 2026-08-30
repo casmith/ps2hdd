@@ -378,6 +378,17 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	// cache directory and the result is copied in. Converting straight onto a
 	// FUSE mount would be slower and would leave a partial file on the HDD if
 	// it were interrupted.
+	// An archived rip has to become real files before it can be converted:
+	// the converter reads the cuesheet and seeks around the data track.
+	if g.ArchiveMember != "" {
+		discs, cleanup, err := s.extractPS1Source(ctx, g, opts)
+		if err != nil {
+			return rep, err
+		}
+		defer cleanup()
+		g.Discs = discs
+	}
+
 	staging, err := os.MkdirTemp("", "ps2hdd-vcd-")
 	if err != nil {
 		return rep, err

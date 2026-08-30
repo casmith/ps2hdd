@@ -275,14 +275,49 @@ func scanLinesOrCR(data []byte, atEOF bool) (advance int, token []byte, err erro
 
 func firstUsefulLine(streams ...string) string {
 	for _, s := range streams {
-		for _, line := range strings.Split(s, "\n") {
+		lines := strings.Split(s, "\n")
+		// A tool that groups its diagnostics under a heading buries the useful
+		// line behind its banner: 7-Zip prints its version, what it scanned,
+		// and only then "ERRORS:" followed by the thing that actually went
+		// wrong. The heading wins when there is one.
+		for i, line := range lines {
+			if strings.TrimSpace(line) != "ERRORS:" {
+				continue
+			}
+			for _, next := range lines[i+1:] {
+				if msg := strings.TrimSpace(next); msg != "" {
+					return msg
+				}
+			}
+		}
+		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if line != "" && !strings.HasPrefix(line, "hdl_dump-") {
+			if line != "" && !toolBanner(line) {
 				return line
 			}
 		}
 	}
 	return ""
+}
+
+// toolBanner reports whether a line is a tool announcing itself rather than
+// saying anything about what went wrong.
+//
+// Without this the error a user sees is a copyright notice, which is both
+// useless and actively misleading -- it looks like the tool is missing or
+// mis-invoked when the real message is three lines further down.
+func toolBanner(line string) bool {
+	prefixes := []string{
+		"hdl_dump-",                                                        // hdl_dump
+		"7-Zip", "64-bit locale", "Scanning the drive", "Listing archive:", // 7z
+		"hdd:", "pfs ", "ps2fs:", "PS2 APA Driver", // pfsshell and pfsfuse
+	}
+	for _, p := range prefixes {
+		if strings.HasPrefix(line, p) {
+			return true
+		}
+	}
+	return strings.Contains(line, "Copyright (c)")
 }
 
 func truncate(s string, n int) string {
