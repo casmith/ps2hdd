@@ -61,7 +61,8 @@ grep -q "Shadow of the Colossus" "$WORK/after-dry.txt" \
 
 step "install a PS2 title"
 ps2hdd install "$DEMO/sources/ps2/Shadow of the Colossus.iso"
-ps2hdd list --installed --no-artwork | grep -q "Shadow of the Colossus" \
+ps2hdd list --installed --no-artwork > "$WORK/after-install.txt"
+grep -q "Shadow of the Colossus" "$WORK/after-install.txt" \
   || fail "the PS2 title was not installed"
 
 step "installing the same title twice is refused"
@@ -112,14 +113,17 @@ step "remove the PS1 title, all discs"
 ps2hdd remove "Metal Gear Solid"
 # --installed matters here: the title is still in the source directory, and
 # a source directory is never evidence that something is installed.
-ps2hdd list --ps1 --installed --no-artwork | grep -q "Metal Gear Solid" \
+ps2hdd list --ps1 --installed --no-artwork > "$WORK/after-ps1-remove.txt"
+grep -q "Metal Gear Solid" "$WORK/after-ps1-remove.txt" \
   && fail "the PS1 title survived removal" || true
-ls "$DEMO/partitions/pops/" | grep -q "Metal Gear" \
+ls "$DEMO/partitions/pops/" > "$WORK/pops-after.txt"
+grep -q "Metal Gear" "$WORK/pops-after.txt" \
   && fail "a VCD survived removal" || true
 
 step "remove the PS2 title"
 ps2hdd remove SCUS_974.72
-ps2hdd list --installed --no-artwork | grep -q "Shadow of the Colossus" \
+ps2hdd list --installed --no-artwork > "$WORK/after-ps2-remove.txt"
+grep -q "Shadow of the Colossus" "$WORK/after-ps2-remove.txt" \
   && fail "the PS2 title survived removal" || true
 
 step "artwork survives a removal that did not ask to purge it"
