@@ -10,8 +10,16 @@
 #
 # It is read-only. Neither tool is asked to modify anything.
 #
+#   scripts/crosscheck-hdl.sh                       # the configured drive
 #   scripts/crosscheck-hdl.sh /dev/disk/by-id/ata-YOUR_DRIVE
 #   scripts/crosscheck-hdl.sh /dev/loop1            # a disk image, see below
+#
+# With no argument the drive ps2hdd is configured with is used. Note that under
+# sudo that is root's config, not yours, because sudo resets HOME.
+#
+# `ps2hdd doctor` runs this same comparison natively and needs no arguments at
+# all. This script exists for the cases doctor cannot cover: a drive you have
+# not configured, or a disk image behind a loop device.
 #
 # Raw block devices are root-owned, so this normally needs sudo.
 #
@@ -31,12 +39,19 @@ DEV="${1:-}"
 PS2HDD="${PS2HDD:-./ps2hdd}"
 HDL="${HDL:-hdl_dump}"
 
-if [ -z "$DEV" ]; then
-  sed -n '3,28p' "$0" | sed 's/^# \{0,1\}//'
-  exit 2
-fi
 command -v "$HDL" >/dev/null || { echo "hdl_dump not found; set HDL=/path/to/hdl_dump" >&2; exit 2; }
 [ -x "$PS2HDD" ] || { echo "ps2hdd not found at $PS2HDD; set PS2HDD=/path/to/ps2hdd" >&2; exit 2; }
+
+# No device named: fall back to the one ps2hdd is configured with, so this can
+# be run the same way as every other command.
+if [ -z "$DEV" ]; then
+  DEV=$("$PS2HDD" --json config show 2>/dev/null |
+    python3 -c 'import json,sys; print(json.load(sys.stdin).get("device") or "")' 2>/dev/null) || DEV=""
+fi
+if [ -z "$DEV" ]; then
+  sed -n '3,34p' "$0" | sed 's/^# \{0,1\}//'
+  exit 2
+fi
 [ -r "$DEV" ] || { echo "cannot read $DEV -- run under sudo, or join the 'disk' group" >&2; exit 2; }
 
 echo "device:   $DEV"
