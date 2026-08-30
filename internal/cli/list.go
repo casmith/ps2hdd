@@ -40,7 +40,10 @@ Only the HDD decides that.`,
 				return fmt.Errorf("--installed and --available are mutually exclusive")
 			}
 
-			c, warnings := env.Svc.Catalog(cmd.Context())
+			c, warnings, err := env.Svc.Catalog(cmd.Context())
+			if err != nil {
+				return err
+			}
 			f := catalog.Filter{
 				Installed:    installed,
 				NotInstalled: available,
@@ -120,7 +123,10 @@ func newInfoCommand(env *Env) *cobra.Command {
 				return nil
 			}
 
-			c, warnings := env.Svc.Catalog(cmd.Context())
+			c, warnings, err := env.Svc.Catalog(cmd.Context())
+			if err != nil {
+				return err
+			}
 			matches := c.Find(query)
 			switch len(matches) {
 			case 0:

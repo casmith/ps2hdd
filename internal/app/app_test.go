@@ -370,7 +370,10 @@ func TestPS1ReadinessAndImport(t *testing.T) {
 
 func TestCatalogReconcilesBothSides(t *testing.T) {
 	svc, _ := newTestServices(t)
-	c, warnings := svc.Catalog(context.Background())
+	c, warnings, err := svc.Catalog(context.Background())
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
 	for _, w := range warnings {
 		t.Logf("warning: %v", w)
 	}
@@ -533,7 +536,10 @@ func TestMissingToolIsReportedAsASetupGap(t *testing.T) {
 
 	// The catalog still loads: PS2 games come from the native APA reader and
 	// need no external tool at all.
-	c, warnings := svc.Catalog(ctx)
+	c, warnings, err := svc.Catalog(ctx)
+	if err != nil {
+		t.Fatalf("Catalog: %v", err)
+	}
 	var ps2 int
 	for _, e := range c.Entries {
 		if e.Installed && e.Platform == model.PlatformPS2 {
@@ -577,5 +583,41 @@ func TestMissingToolIsReportedAsASetupGap(t *testing.T) {
 		t.Error("AssetStatus succeeded without pfsfuse")
 	} else if _, ok := app.AsMissingTool(err); !ok {
 		t.Errorf("AssetStatus error is not a MissingToolError: %v", err)
+	}
+}
+
+// A library that could not be read is not an empty library.
+//
+// Reconciling an empty installed set against the source directories produces a
+// catalog in which every title is "available", and `install --from-source`
+// acts on exactly that judgement. A safety refusal reaches this path the same
+// way a corrupt partition table does, so the test drives it with a device that
+// cannot be validated at all.
+func TestCatalogFailsWhenTheHDDCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	env, err := demo.Setup(filepath.Join(root, "demo"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := env.Config(config.Default())
+	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
+	// The source directories stay configured, so a catalog built from them
+	// alone would look perfectly healthy. Only the HDD is unreachable.
+	cfg.Device = filepath.Join(root, "not-a-disk.img")
+
+	svc := app.New(cfg, env.Runner())
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+
+	c, _, err := svc.Catalog(context.Background())
+	if err == nil {
+		t.Fatalf("Catalog reported success with an unreadable HDD and returned %d entries", len(c.Entries))
+	}
+	if len(c.Entries) != 0 {
+		t.Errorf("a usable-looking catalog came back with the error: %d entries", len(c.Entries))
 	}
 }

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"sync"
@@ -199,17 +200,19 @@ func (s *Services) InstalledPS1(ctx context.Context) ([]model.Game, error) {
 
 // Installed lists every installed title.
 //
-// The PS2 half comes from the native APA reader and always succeeds; the PS1
-// half needs a PFS mount. When only the PS1 half fails the PS2 games are still
-// returned alongside the error, because a partial library is more useful than
-// none.
+// The PS2 half comes from the native APA reader, the PS1 half needs a PFS
+// mount, and the two fail differently. When only the PS1 half fails the PS2
+// games are returned alongside a *catalog.PartialError, because a partial
+// library is more useful than none. Any other error means nothing could be
+// read -- including a safety refusal, which is raised before the reader is
+// ever constructed -- and the returned slice is nil.
 func (s *Services) Installed(ctx context.Context) ([]model.Game, error) {
 	r, err := s.reader(ctx)
 	if err != nil {
 		return nil, err
 	}
 	games, err := r.All(ctx)
-	return games, missingTool(err, external.PFSFuseTool, "PlayStation 1 games")
+	return games, partialAwareMissingTool(err, external.PFSFuseTool, "PlayStation 1 games")
 }
 
 // PS1Readiness reports whether POPStarter is set up.
@@ -271,14 +274,23 @@ func (s *Services) ClearSourceCache() error {
 // Catalog builds the reconciled library: installed titles from the HDD, source
 // titles from the configured directories, and the artwork gap between them.
 //
-// A failure to read the HDD is not fatal: the source half is still useful, and
-// showing it with an explanation beats showing nothing.
-func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error) {
+// Failing to read the HDD is fatal to the catalog, and deliberately so. The
+// installed half is the only authority on what is on the disk; when it cannot
+// be read, a catalog built from the source half alone says every title is not
+// installed. That is not a degraded answer, it is a wrong one, and `install`
+// and `list --installed` both act on it. A missing PS1 mount is the one
+// recoverable case: it arrives as a *catalog.PartialError and becomes a
+// warning, because the PS2 half it carries is still complete and true.
+func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error, error) {
 	var warnings []error
 
 	installed, err := s.Installed(ctx)
-	if err != nil {
-		warnings = append(warnings, missingTool(err, external.PFSFuseTool, "PlayStation 1 games"))
+	var partial *catalog.PartialError
+	switch {
+	case errors.As(err, &partial):
+		warnings = append(warnings, partial.Err)
+	case err != nil:
+		return catalog.Catalog{}, nil, err
 	}
 
 	ps2Res, ps1Res, err := s.ScanSources(ctx)
@@ -293,7 +305,7 @@ func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error) {
 	if err := s.annotateAssets(ctx, &c); err != nil {
 		warnings = append(warnings, missingTool(err, external.PFSFuseTool, "Artwork status"))
 	}
-	return c, warnings
+	return c, warnings, nil
 }
 
 // annotateAssets fills in MissingAssets for the installed entries.
