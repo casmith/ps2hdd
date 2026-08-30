@@ -18,7 +18,7 @@ func TestLoadMissingFileYieldsDefaults(t *testing.T) {
 		t.Fatalf("Load: %v", err)
 	}
 	// A first run must work with no setup at all.
-	if cfg.Assets.Provider != "ps2-covers" {
+	if cfg.Assets.Provider != "opl-art" {
 		t.Errorf("provider = %q", cfg.Assets.Provider)
 	}
 	if !cfg.TUI.ConfirmDestructiveActions {
@@ -164,16 +164,19 @@ func TestValidateRejectsMissingSourceDir(t *testing.T) {
 }
 
 func TestWantedAssets(t *testing.T) {
-	cfg := config.Default() // covers and config on, everything else off
+	// The defaults are the three slots the default provider can actually
+	// fill: front cover, back cover and the disc image.
+	cfg := config.Default()
 	want := cfg.WantedAssets()
 	has := map[model.AssetType]bool{}
 	for _, t := range want {
 		has[t] = true
 	}
-	if !has[model.AssetCover] || !has[model.AssetConfig] {
+	if !has[model.AssetCover] || !has[model.AssetCoverBack] || !has[model.AssetIcon] {
 		t.Errorf("defaults = %v", want)
 	}
-	if has[model.AssetBackground] || has[model.AssetIcon] {
+	// CFG is off by default: it is a settings file no database can generate.
+	if has[model.AssetBackground] || has[model.AssetConfig] || has[model.AssetSpine] {
 		t.Errorf("disabled slots leaked in: %v", want)
 	}
 
@@ -273,4 +276,46 @@ func itoa(n int) string {
 		n /= 10
 	}
 	return string(buf[i:])
+}
+
+// `icons` was renamed to `discs`. An existing config must keep asking for the
+// slot it asked for before.
+func TestLegacyIconsKeyStillEnablesDiscs(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[assets]\nicons = true\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.Assets.Discs {
+		t.Error("icons = true did not enable the disc slot")
+	}
+	var found bool
+	for _, a := range cfg.WantedAssets() {
+		if a == model.AssetIcon {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ICO not wanted: %v", cfg.WantedAssets())
+	}
+}
+
+// A deliberate `icons = false` must survive too, which it cannot if absent and
+// false look the same after unmarshalling over a default of true.
+func TestLegacyIconsFalseDisablesDiscs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(path, []byte("[assets]\nicons = false\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := config.Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Assets.Discs {
+		t.Error("icons = false left the disc slot enabled")
+	}
 }

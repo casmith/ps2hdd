@@ -362,27 +362,65 @@ cover databases index by.
 
 | Provider | Source | Slots |
 |---|---|---|
+| `opl-art` *(default)* | [Luden02/psx-ps2-opl-art-database](https://github.com/Luden02/psx-ps2-opl-art-database) | `COV` `COV2` `ICO` `LAB` `LGO` `BG` `SCR` `SCR2` |
 | `ps2-covers` | [xlenore/ps2-covers](https://github.com/xlenore/ps2-covers) and [xlenore/psx-covers](https://github.com/xlenore/psx-covers) | `COV` only |
 | `local` | a directory on the workstation | any |
 | `http` | URL templates from the config file | any |
 
+### opl-art
+
+A GitHub mirror of the OPL Manager GameArt Database, indexed by the OPL serial
+form and laid out one directory per game:
+
+```
+https://raw.githubusercontent.com/Luden02/psx-ps2-opl-art-database/main/PS2/SLUS_207.12/SLUS_207.12_ICO.png
+```
+
+It is the default for two reasons beyond coverage. Its images are PNG, which is
+what the destination filename claims and what OPL's own guidelines specify; and
+they are already at OPL's exact pixel sizes, so nothing is scaled on a console
+that would rather not.
+
+Backgrounds and screenshots are numbered in the database (`_BG_00`, `_SCR_00`)
+with no unnumbered file to fall back on. OPL has room for one background and
+two screenshots, so the first of each is what gets installed.
+
+### ps2-covers
+
 The xlenore collections are what PCSX2 and DuckStation ship as their default
-cover sources. They are reachable over plain HTTPS with no authentication and
-are indexed by the dashed serial:
+cover sources, indexed by the dashed serial:
 
 ```
 https://raw.githubusercontent.com/xlenore/ps2-covers/main/covers/default/SLUS-20946.jpg
 https://raw.githubusercontent.com/xlenore/psx-covers/main/covers/default/SLUS-00067.jpg
 ```
 
-**They hold front covers only.** Every other OPL slot is reported as
-unavailable rather than filled with a substitute: a background made from a
-cover looks wrong on a console, and "missing" is more useful than wrong.
+**They hold front covers only**, as high-resolution JPEG. Every other OPL slot
+is reported as unavailable rather than filled with a substitute: a background
+made from a cover looks wrong on a console, and "missing" is more useful than
+wrong.
 
-For the other slots, point `assets.mirror` at a local artwork collection — an
-OPL Manager art dump or a copy of a working `+OPL/ART` both work unchanged —
-or add `[assets.templates]` entries for another database. A mirror is chained
-ahead of the remote provider automatically.
+### Enabling a slot nothing can supply
+
+An enabled slot the provider cannot serve is not a gap syncing will ever close.
+Those slots are reported separately from real gaps -- `ps2hdd doctor` lists
+them under **Not supplied**, `art status` leaves them out of the table and names
+them once underneath -- because counting them as missing artwork makes a
+complete library report as permanently broken.
+
+For slots your provider lacks, point `assets.mirror` at a local artwork
+collection -- an OPL Manager art dump or a copy of a working `+OPL/ART` both
+work unchanged -- or add `[assets.templates]` entries for another database. A
+mirror is chained ahead of the remote provider automatically, and a chain can
+fill a slot if any member can.
+
+### Everything is written as PNG
+
+Art files are named `<serial>_<TYPE>.png` and OPL picks its decoder from that
+extension, so bytes from a provider serving JPEG are re-encoded on the way in
+rather than copied into a name they do not match. Anything that cannot be
+decoded as an image is refused rather than written: a file the console cannot
+draw is worse than an absent one, because it looks installed.
 
 Templates understand `{serial}` (dashed), `{serial_opl}`, `{serial_plain}`,
 `{type}` and `{platform}`.

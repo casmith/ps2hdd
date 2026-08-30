@@ -81,6 +81,21 @@ func newHTTPTemplate(o Options) (Provider, error) {
 
 func (p *httpTemplate) Name() string { return p.name }
 
+// Supports reports the types the user configured a template for: this
+// provider can supply exactly what it was given a URL for, and nothing else.
+func (p *httpTemplate) Supports() []model.AssetType {
+	out := make([]model.AssetType, 0, len(p.templates))
+	for _, t := range model.ArtTypes {
+		if _, ok := p.templates[t]; ok {
+			out = append(out, t)
+		}
+	}
+	if _, ok := p.templates[model.AssetConfig]; ok {
+		out = append(out, model.AssetConfig)
+	}
+	return out
+}
+
 func (p *httpTemplate) Lookup(ctx context.Context, game model.Game, want []model.AssetType) (model.AssetSet, error) {
 	var set model.AssetSet
 	if model.NormalizeGameID(game.GameID) == "" {
@@ -138,6 +153,13 @@ func newPS2Covers(o Options) (Provider, error) {
 }
 
 func (p *ps2covers) Name() string { return "ps2-covers" }
+
+// Supports is front covers and nothing else. The xlenore collections hold a
+// front cover and a 3D box render per game; there are no back covers, spines,
+// discs, backgrounds or screenshots in them.
+func (p *ps2covers) Supports() []model.AssetType {
+	return []model.AssetType{model.AssetCover}
+}
 
 func (p *ps2covers) Lookup(ctx context.Context, game model.Game, want []model.AssetType) (model.AssetSet, error) {
 	var set model.AssetSet

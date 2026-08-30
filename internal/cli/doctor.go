@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"runtime"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -54,6 +55,11 @@ type DoctorProvider struct {
 	Name   string `json:"name"`
 	OK     bool   `json:"ok"`
 	Reason string `json:"reason,omitempty"`
+	// Enabled is every art slot the configuration asks for; Unavailable is
+	// the subset this provider cannot supply for anyone. A non-empty
+	// Unavailable is a setup problem, not a per-game one.
+	Enabled     []model.AssetType `json:"enabled_slots,omitempty"`
+	Unavailable []model.AssetType `json:"unavailable_slots,omitempty"`
 }
 
 func newDoctorCommand(env *Env) *cobra.Command {
@@ -159,6 +165,18 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 		rep.Problems = append(rep.Problems, "The artwork provider is misconfigured: "+err.Error())
 	} else {
 		rep.Provider.Name = p.Name()
+		rep.Provider.Enabled = env.Config.WantedAssets()
+		_, rep.Provider.Unavailable = env.Svc.WantedAndUnavailable()
+		if len(rep.Provider.Unavailable) > 0 {
+			names := make([]string, 0, len(rep.Provider.Unavailable))
+			for _, t := range rep.Provider.Unavailable {
+				names = append(names, string(t))
+			}
+			rep.Problems = append(rep.Problems, fmt.Sprintf(
+				"%d of %d enabled artwork slots (%s) cannot be supplied by the %s provider, so they will never be filled. Turn them off, or switch to a provider that has them.",
+				len(rep.Provider.Unavailable), len(rep.Provider.Enabled),
+				strings.Join(names, ", "), p.Name()))
+		}
 		if err := p.Check(ctx); err != nil {
 			rep.Provider.Reason = err.Error()
 			rep.Problems = append(rep.Problems, "The artwork provider is unreachable: "+firstLine(err.Error()))
@@ -287,6 +305,23 @@ func renderDoctor(env *Env, rep DoctorReport) {
 	}
 
 	section(env.Out, "Artwork provider")
+	if len(rep.Provider.Enabled) > 0 {
+		names := func(ts []model.AssetType) string {
+			out := make([]string, 0, len(ts))
+			for _, t := range ts {
+				out = append(out, string(t))
+			}
+			return strings.Join(out, ", ")
+		}
+		kv(env.Out, [][2]string{
+			{"Slots enabled", names(rep.Provider.Enabled)},
+		})
+		if len(rep.Provider.Unavailable) > 0 {
+			kv(env.Out, [][2]string{
+				{"Not supplied", amber(names(rep.Provider.Unavailable))},
+			})
+		}
+	}
 	status := green("OK")
 	if !rep.Provider.OK {
 		status = amber(firstLine(rep.Provider.Reason))

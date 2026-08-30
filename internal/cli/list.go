@@ -206,6 +206,11 @@ func renderGameDetail(env *Env, e catalog.CatalogEntry) {
 				env.printf("  %-6s %s%s\n", t, amber("missing"), dim(desc))
 			}
 		}
+		// Slots the provider cannot supply are listed apart from the gaps, in
+		// a calmer colour: nothing the user does will fill them.
+		for _, t := range e.UnavailableAssets {
+			env.printf("  %-6s %s\n", t, dim("not supplied by "+env.Config.Assets.Provider))
+		}
 	}
 }
 

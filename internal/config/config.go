@@ -62,14 +62,27 @@ type AssetsConfig struct {
 	// URL templates understood by internal/asset/provider.
 	Templates map[string]string `toml:"templates,omitempty" json:"templates,omitempty"`
 
-	Covers      bool `toml:"covers" json:"covers"`
+	// Covers is the front cover, COV. BackCovers is COV2, kept separate
+	// because the two are not equally available: several databases hold front
+	// covers and nothing else, and one flag for both meant such a setup could
+	// never report a complete library.
+	Covers     bool `toml:"covers" json:"covers"`
+	BackCovers bool `toml:"back_covers" json:"back_covers"`
+	// Discs is the disc image, ICO. OPL Manager labels this slot "Disc"; it
+	// is a 64x64 picture of the disc, not an application icon.
+	Discs       bool `toml:"discs" json:"discs"`
 	Backgrounds bool `toml:"backgrounds" json:"backgrounds"`
 	Screenshots bool `toml:"screenshots" json:"screenshots"`
-	Icons       bool `toml:"icons" json:"icons"`
 	Logos       bool `toml:"logos" json:"logos"`
 	Spines      bool `toml:"spines" json:"spines"`
 	// Config controls syncing per-game +OPL/CFG entries.
 	Config bool `toml:"config" json:"config"`
+
+	// Icons is the former name of Discs, read so an existing config keeps
+	// working. It is a pointer because absent and false have to be told
+	// apart: an unmarshal over a populated default cannot otherwise honour
+	// someone who wrote `icons = false`. normalise folds it into Discs.
+	Icons *bool `toml:"icons,omitempty" json:"-"`
 }
 
 // ToolsConfig overrides external executable locations. Empty means "look the
@@ -92,15 +105,24 @@ type TUIConfig struct {
 }
 
 // Default returns a configuration with conservative defaults: confirmations
-// on, verification on, and only cover art enabled (it is the one slot a
-// currently-reachable public database reliably has).
+// on, verification on, and the three art slots the default provider can
+// actually fill for essentially every title -- front cover, back cover and the
+// disc image.
+//
+// Enabling a slot the provider cannot supply is what makes a library report as
+// permanently incomplete, so the defaults are chosen to be satisfiable.
 func Default() Config {
 	return Config{
 		Install: InstallConfig{SyncAssets: true, VerifyAfterInstall: true},
 		Assets: AssetsConfig{
-			Provider: "ps2-covers",
-			Covers:   true,
-			Config:   true,
+			// opl-art is the default because it is the only source that can
+			// satisfy the slots enabled here. A default configuration that
+			// reports every game as incomplete, forever, teaches people to
+			// ignore the report.
+			Provider:   "opl-art",
+			Covers:     true,
+			BackCovers: true,
+			Discs:      true,
 		},
 		TUI: TUIConfig{ConfirmDestructiveActions: true},
 	}
@@ -116,12 +138,12 @@ func (c Config) WantedAssets() []model.AssetType {
 		}
 	}
 	add(c.Assets.Covers, model.AssetCover)
-	add(c.Assets.Covers, model.AssetCoverBack)
+	add(c.Assets.BackCovers, model.AssetCoverBack)
 	add(c.Assets.Spines, model.AssetSpine)
 	add(c.Assets.Backgrounds, model.AssetBackground)
 	add(c.Assets.Screenshots, model.AssetScreen)
 	add(c.Assets.Screenshots, model.AssetScreen2)
-	add(c.Assets.Icons, model.AssetIcon)
+	add(c.Assets.Discs, model.AssetIcon)
 	add(c.Assets.Logos, model.AssetLogo)
 	add(c.Assets.Config, model.AssetConfig)
 	return out
@@ -172,7 +194,14 @@ func (c *Config) normalise() {
 	c.Assets.Mirror = ExpandPath(c.Assets.Mirror)
 	c.Device = strings.TrimSpace(c.Device)
 	if c.Assets.Provider == "" {
-		c.Assets.Provider = "ps2-covers"
+		c.Assets.Provider = "opl-art"
+	}
+	// `icons` was the old name for the disc slot. Fold it in so an existing
+	// config keeps asking for exactly what it asked for before, including a
+	// deliberate `icons = false`.
+	if c.Assets.Icons != nil {
+		c.Assets.Discs = *c.Assets.Icons
+		c.Assets.Icons = nil
 	}
 }
 
