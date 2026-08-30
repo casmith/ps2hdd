@@ -250,6 +250,37 @@ through `hdl_dump`: the reference implementation decides how APA space is laid
 out. ps2hdd confirms the result by reading the partition table back, because
 `pfsshell` is a shell and a failed `mkpart` still exits 0.
 
+### Compressed sources
+
+A PS2 library kept as `.7z`, `.zip` or `.rar` archives is read in place. One
+archive holding one disc image is the expected shape; anything else is reported
+rather than guessed at.
+
+Scanning does not unpack anything. Only the first 16 MiB of each image is
+decompressed, which covers the volume descriptor and the root directory — the
+serial, the title, the true image size and the media type all come from there.
+A cold scan of 513 archives takes about 25 seconds, and the result is cached.
+
+`SYSTEM.CNF` is still preferred for the serial when it can be reached, but on a
+real library it often sits gigabytes into the image, well past any bounded
+read. The fallback is the boot ELF in the root directory, which every PS2 disc
+names after its serial (`SLUS_202.16;1`). That fallback applies only to a
+partial read: given the whole image, ps2hdd has no excuse to guess.
+
+A CD-based title ripped raw comes out with its cuesheet. `hdl_dump` cannot read
+a bare MODE2/2352 `.bin` — its input layer answers `Input or output is
+unsupported` — but it reads the CDRWIN sheet naming that `.bin` perfectly well,
+because the sheet is what records the sector layout. So the sheet is extracted
+alongside and is what gets handed over. The same applies to a loose `.bin` with
+a `.cue` beside it.
+
+Installing does unpack, because `hdl_dump` seeks around the image and cannot be
+fed a stream. The copy goes to `install.scratch_dir` (default
+`~/.cache/ps2hdd/scratch`, deliberately not `/tmp`, which is often tmpfs), is
+checked for free space first, and is deleted afterwards whatever the outcome.
+
+Needs `7z` on PATH; `ps2hdd doctor` says whether it is there.
+
 Installing a PS1 game converts the rip to POPS's VCD format — built in, and
 verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies
 it into `__.POPS`. Multi-disc titles get a `DISCS.TXT` so POPStarter can swap

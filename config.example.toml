@@ -26,6 +26,10 @@ device = "/dev/disk/by-id/ata-WDC_WD1200JB-00REA0_WD-WCANM1234567"
 # `ps2hdd install /any/path/game.iso` works.
 #
 # PS2: *.iso (and .bin/.img), identified from SYSTEM.CNF, not the filename.
+#      Archives (.7z, .zip, .rar) holding a single image are read too, without
+#      being unpacked: only the first few megabytes are decompressed, which is
+#      enough for the volume descriptor and the root directory. Installing one
+#      does unpack it -- see install.scratch_dir below.
 # PS1: *.cue preferred, with the .bin it names ignored as a separate entry.
 #      Multi-disc titles are grouped automatically.
 ps2 = "/mnt/nas/games/ps2"
@@ -39,6 +43,15 @@ sync_assets = true
 # Re-read the HDD after installing and confirm the game is really there.
 # Cheap, and it turns a silent failure into a loud one.
 verify_after_install = true
+
+# Where an archived image is unpacked before it is injected. hdl_dump seeks
+# around the image it reads, so an archive cannot be streamed into it.
+#
+# Defaults to the cache directory (~/.cache/ps2hdd/scratch), deliberately not
+# /tmp: several distributions mount that as tmpfs, and unpacking a 4.7 GB DVD
+# rip into RAM does not end well. Point this at a disk with room if your home
+# partition is small. The copy is deleted after the install either way.
+# scratch_dir = "/mnt/scratch/ps2hdd"
 
 
 [assets]

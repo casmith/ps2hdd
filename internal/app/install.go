@@ -27,6 +27,7 @@ const (
 	StageInspecting Stage = "inspecting"
 	StageValidating Stage = "validating"
 	StageConverting Stage = "converting"
+	StageExtracting Stage = "extracting"
 	StageInstalling Stage = "installing"
 	StageRemoving   Stage = "removing"
 	StageVerifying  Stage = "verifying"
@@ -188,10 +189,47 @@ func (s *Services) installPS2(ctx context.Context, g model.Game, opts InstallOpt
 		return rep, fmt.Errorf("the media type of %s is unknown; ps2hdd will not guess between a CD and a DVD image", g.Title)
 	}
 
+	// An archived source has to become a real file before hdl_dump can read
+	// it: hdl_dump seeks around the image, so a pipe is not an option.
+	// A loose .bin has the same problem an archived one does: hdl_dump needs
+	// the cuesheet beside it, not the raw image.
+	source := HDLSourcePath(g.SourcePath)
+	if g.ArchiveMember != "" {
+		if s.DryRun {
+			// Listing an archive reads its header only, so the plan shown here
+			// is the plan that will run, cuesheet and all, rather than an
+			// approximation of it.
+			rep.Commands = append(rep.Commands,
+				append([]string{external.SevenZipTool},
+					external.ExtractArgs(g.SourcePath, g.ArchiveMember, "<scratch>")...))
+			source = filepath.Join("<scratch>", filepath.Base(g.ArchiveMember))
+
+			a := external.Archive{Runner: s.Runner}
+			if entries, lerr := a.List(ctx, g.SourcePath); lerr == nil {
+				if cue := cueMemberFor(entries, g.ArchiveMember); cue != "" {
+					rep.Commands = append(rep.Commands,
+						append([]string{external.SevenZipTool},
+							external.ExtractArgs(g.SourcePath, cue, "<scratch>")...))
+					source = filepath.Join("<scratch>", filepath.Base(cue))
+				}
+			}
+		} else {
+			extracted, cleanup, err := s.extractSource(ctx, g, opts)
+			if err != nil {
+				return rep, err
+			}
+			// The scratch copy is removed whatever happens next, including a
+			// failed install: it is a duplicate of data that still exists in
+			// the archive, and gigabytes of it.
+			defer cleanup()
+			source = extracted
+		}
+	}
+
 	req := external.InstallRequest{
 		Device:  t.Path,
 		Name:    g.Title,
-		Source:  g.SourcePath,
+		Source:  source,
 		Startup: model.OPLGameID(g.GameID),
 		Media:   g.Media,
 		Hidden:  opts.Hidden,

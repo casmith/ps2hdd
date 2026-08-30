@@ -5,6 +5,7 @@ package ps2
 import (
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -23,6 +24,10 @@ var ErrNotPS2 = errors.New("not a PlayStation 2 disc image")
 // This is only a fallback. The authoritative signal is the CD-ROM XA
 // signature in the volume descriptor -- see MediaType below.
 const cdSizeLimit = 750 * 1024 * 1024
+
+// RawSectorSize is a CD sector as a ripper writes it: a 2048-byte block with
+// sync, header and error-correction bytes around it.
+const RawSectorSize = 2352
 
 // Image is the result of inspecting a PS2 disc image.
 type Image struct {
@@ -75,26 +80,53 @@ func Inspect(path string) (Image, error) {
 	if err != nil {
 		return Image{}, err
 	}
-	img := Image{Path: path, SizeBytes: fi.Size()}
+	return InspectAt(f, fi.Size(), path, false)
+}
 
-	vol, err := iso9660.Open(iso9660.Mode2048(f))
+// InspectAt reads a PS2 image from an io.ReaderAt.
+//
+// name is the path the image is known by, used for the display title and for
+// error messages; size is the image's full size, which the caller knows even
+// when r covers only part of it.
+//
+// partial says that r holds only the beginning of the image. That changes one
+// thing: where the serial may come from. SYSTEM.CNF is authoritative and is
+// used whenever it can be read, but on a real library it frequently sits
+// gigabytes into the image -- three of eight sampled rips put it past the
+// 2 GB mark -- so it is out of reach when the image is arriving as a
+// decompression stream that costs real time to advance. The root directory is
+// always near the front, and every PS2 disc carries its boot ELF there named
+// for the serial: SLUS_202.16;1. That is the fallback, and only for a partial
+// read, because a caller holding the whole image has no excuse for a guess.
+func InspectAt(r io.ReaderAt, size int64, name string, partial bool) (Image, error) {
+	img := Image{Path: name, SizeBytes: size}
+
+	vol, err := openVolume(r, size)
 	if err != nil {
-		return img, fmt.Errorf("%s: %w: %v", filepath.Base(path), ErrNotPS2, err)
+		return img, fmt.Errorf("%s: %w: %v", filepath.Base(name), ErrNotPS2, err)
 	}
 	img.VolumeID = vol.VolumeID
 
-	cnf, err := vol.ReadFile("SYSTEM.CNF")
-	if err != nil {
-		return img, fmt.Errorf("%s: %w: SYSTEM.CNF is missing", filepath.Base(path), ErrNotPS2)
-	}
-	boot, ok := ParseSystemCNF(string(cnf), "BOOT2")
-	if !ok {
-		return img, fmt.Errorf("%s: %w: SYSTEM.CNF has no BOOT2 entry", filepath.Base(path), ErrNotPS2)
-	}
-	img.BootFile = boot
-	img.GameID = model.FindGameID(boot)
-	if img.GameID == "" {
-		return img, fmt.Errorf("%s: BOOT2 is %q, which carries no recognisable serial", filepath.Base(path), boot)
+	cnf, cnfErr := vol.ReadFile("SYSTEM.CNF")
+	switch {
+	case cnfErr == nil:
+		boot, ok := ParseSystemCNF(string(cnf), "BOOT2")
+		if !ok {
+			return img, fmt.Errorf("%s: %w: SYSTEM.CNF has no BOOT2 entry", filepath.Base(name), ErrNotPS2)
+		}
+		img.BootFile = boot
+		img.GameID = model.FindGameID(boot)
+		if img.GameID == "" {
+			return img, fmt.Errorf("%s: BOOT2 is %q, which carries no recognisable serial", filepath.Base(name), boot)
+		}
+	case partial:
+		id, err := serialFromRoot(vol)
+		if err != nil {
+			return img, fmt.Errorf("%s: %w: %v", filepath.Base(name), ErrNotPS2, err)
+		}
+		img.GameID = id
+	default:
+		return img, fmt.Errorf("%s: %w: SYSTEM.CNF is missing", filepath.Base(name), ErrNotPS2)
 	}
 
 	// The volume space size is what hdl_dump uses to size the install; it can
@@ -104,8 +136,80 @@ func Inspect(path string) (Image, error) {
 		img.SizeBytes = vs
 	}
 	img.Media, img.MediaFromSize = MediaType(vol, img.SizeBytes)
-	img.Title = TitleFromPath(path, img.VolumeID)
+	img.Title = TitleFromPath(name, img.VolumeID)
 	return img, nil
+}
+
+// bootELFName matches a PS2 boot ELF exactly as the console's naming
+// convention writes it: four letters, an underscore, three digits, a dot, two
+// digits, and the ISO 9660 version suffix.
+//
+// model.FindGameID is deliberately looser -- it has to find a serial inside a
+// filename someone typed -- and that looseness is wrong here. A root directory
+// listing is machine-written, so the strict form is available, and accepting
+// less means matching data files: one real rip has both SLUS_212.81 and a
+// NA_715.74 at its root, and the loose pattern claims both.
+var bootELFName = regexp.MustCompile(`^([A-Z]{4})_([0-9]{3})\.([0-9]{2})(;[0-9]+)?$`)
+
+// bootELFSerial returns the serial a root-directory entry names, or "".
+func bootELFSerial(name string) string {
+	m := bootELFName.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(name)))
+	if m == nil {
+		return ""
+	}
+	return model.OPLGameID(m[1] + m[2] + m[3])
+}
+
+// openVolume tries the two sector layouts a PS2 rip can have.
+//
+// A CD-based PS2 title ripped with a CD ripper is MODE2/2352: 24 bytes of sync
+// and header in front of each 2048-byte block. A DVD-based title, or a BIN
+// converted to ISO, is a plain 2048 stream. Only 2048 used to be tried, which
+// made every raw CD rip unidentifiable -- 54 of 513 archives in one real
+// library.
+//
+// 2048 is tried first because it is the common case and cannot succeed by
+// accident on a 2352 image: the descriptor would have to land exactly on the
+// signature. The 2352 attempt is gated on the size being a whole number of
+// raw sectors, which a 2048 image is not, except by coincidence.
+func openVolume(r io.ReaderAt, size int64) (*iso9660.Volume, error) {
+	v, err := iso9660.Open(iso9660.Mode2048(r))
+	if err == nil {
+		return v, nil
+	}
+	if size%RawSectorSize == 0 {
+		if v2, err2 := iso9660.Open(iso9660.Mode2352(r)); err2 == nil {
+			return v2, nil
+		}
+	}
+	return nil, err
+}
+
+// serialFromRoot finds the boot ELF in the root directory and reads the serial
+// off its name.
+//
+// It insists on exactly one match. A disc with two serial-shaped names at the
+// root is not something to guess about, and one with none is not a PS2 disc.
+func serialFromRoot(vol *iso9660.Volume) (string, error) {
+	names, err := vol.ReadDir()
+	if err != nil {
+		return "", fmt.Errorf("SYSTEM.CNF is out of reach and the root directory is unreadable: %w", err)
+	}
+	var found []string
+	for _, n := range names {
+		if id := bootELFSerial(n); id != "" {
+			found = append(found, id)
+		}
+	}
+	switch len(found) {
+	case 1:
+		return found[0], nil
+	case 0:
+		return "", fmt.Errorf("SYSTEM.CNF is out of reach and no boot ELF named for a serial is in the root directory")
+	default:
+		return "", fmt.Errorf("SYSTEM.CNF is out of reach and the root directory holds %d serial-shaped names (%s)",
+			len(found), strings.Join(found, ", "))
+	}
 }
 
 // MediaType decides whether an image was mastered for CD or DVD, and reports

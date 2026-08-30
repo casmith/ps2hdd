@@ -75,6 +75,21 @@ type Runner interface {
 	Run(ctx context.Context, c Command) (Result, error)
 	// Look resolves an executable, returning ErrToolMissing when it is absent.
 	Look(name string) (string, error)
+	// Stream runs a command and hands its stdout to fn while the process is
+	// still running.
+	//
+	// It exists for output too large to buffer. Identifying a game inside a
+	// 4 GB archive means reading the first few megabytes of a decompression
+	// stream and then stopping, which Run cannot do: it collects everything
+	// into a string and waits for the process to exit.
+	//
+	// Only fn's error is returned. Once fn stops reading early the process is
+	// killed, so its exit status describes the kill rather than the work, and
+	// treating that as failure would fail every successful partial read. The
+	// caller judges the content it got instead. Whatever the tool wrote to
+	// stderr is attached to fn's error, so a corrupt archive still explains
+	// itself.
+	Stream(ctx context.Context, c Command, fn func(io.Reader) error) error
 }
 
 // ExecRunner runs commands for real.
@@ -111,19 +126,9 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 		return Result{}, err
 	}
 
-	argv := append([]string{path}, c.Args...)
-	if c.Privileged && r.Sudo {
-		sudo := r.SudoPath
-		if sudo == "" {
-			sudo = "sudo"
-		}
-		sudoPath, err := exec.LookPath(sudo)
-		if err != nil {
-			return Result{}, fmt.Errorf("%w: sudo (needed for privileged access to %s)", ErrToolMissing, c.Name)
-		}
-		// -n so a password prompt fails fast instead of blocking a TUI that
-		// has taken over the terminal.
-		argv = append([]string{sudoPath, "-n", "--"}, argv...)
+	argv, err := r.argv(path, c)
+	if err != nil {
+		return Result{}, err
 	}
 
 	log := logging.ContextLogger(ctx)
@@ -160,6 +165,73 @@ func (r *ExecRunner) Run(ctx context.Context, c Command) (Result, error) {
 	}
 	log.Debug("external command finished", "tool", c.Name)
 	return res, nil
+}
+
+// argv builds the argument vector, prefixing sudo for a privileged command.
+func (r *ExecRunner) argv(path string, c Command) ([]string, error) {
+	argv := append([]string{path}, c.Args...)
+	if !c.Privileged || !r.Sudo {
+		return argv, nil
+	}
+	sudo := r.SudoPath
+	if sudo == "" {
+		sudo = "sudo"
+	}
+	sudoPath, err := exec.LookPath(sudo)
+	if err != nil {
+		return nil, fmt.Errorf("%w: sudo (needed for privileged access to %s)", ErrToolMissing, c.Name)
+	}
+	// -n so a password prompt fails fast instead of blocking a TUI that has
+	// taken over the terminal.
+	return append([]string{sudoPath, "-n", "--"}, argv...), nil
+}
+
+// Stream implements Runner.
+func (r *ExecRunner) Stream(ctx context.Context, c Command, fn func(io.Reader) error) error {
+	path, err := r.Look(c.Name)
+	if err != nil {
+		return err
+	}
+	argv, err := r.argv(path, c)
+	if err != nil {
+		return err
+	}
+
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	log := logging.ContextLogger(ctx)
+	log.Info("streaming external command", "tool", c.Name, "argv", argv)
+
+	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.Stdin = c.Stdin
+	var errBuf bytes.Buffer
+	cmd.Stderr = &errBuf
+
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	if err := cmd.Start(); err != nil {
+		return &ToolError{Tool: c.Name, Args: c.Args, Err: err}
+	}
+
+	fnErr := fn(stdout)
+
+	// Closing the read end and cancelling stops a process that is still
+	// producing output. Wait must still be called to reap it; its error is
+	// deliberately discarded, for the reason given on the interface.
+	_ = stdout.Close()
+	cancel()
+	_ = cmd.Wait()
+
+	if fnErr != nil {
+		if stderr := strings.TrimSpace(errBuf.String()); stderr != "" {
+			return &ToolError{Tool: c.Name, Args: c.Args, Err: fnErr, Stderr: stderr}
+		}
+		return fnErr
+	}
+	return nil
 }
 
 // pump copies r into buf while feeding complete lines to onLine.
