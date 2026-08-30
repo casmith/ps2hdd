@@ -24,9 +24,14 @@ A PlayStation 2 internal hard drive as FreeHDBoot leaves it:
 Seven views, one keystroke apart. `tab` cycles them; the digits jump straight to
 one.
 
-**Queue a batch and watch it run.** Selection is multi-select, the estimate is
-computed from the images themselves, and a failure stops that title rather than
-the run.
+**Browse a source directory and pick what you want.** Selection is multi-select
+and the estimate is computed from the images themselves, so it is what will
+actually land on the disk. Titles already installed stay visible and dimmed
+rather than disappearing.
+
+![The PS2 source browser with three titles selected and a 6.0 GiB estimate](docs/screenshots/ps2-source.png)
+
+**Then watch the queue run.** A failure stops that title, not the run.
 
 ![The install queue, one game copying at 55% and four waiting](docs/screenshots/queue.png)
 
@@ -42,9 +47,9 @@ read natively from the APA table with no external tools involved.
 
 ![Drive view showing APA layout, storage and PS1 readiness](docs/screenshots/drive.png)
 
-**Source directories are browsing locations, never a record of what is
-installed** — only the HDD decides that. PS1 rips are grouped into titles, so a
-three-disc release is one entry rather than three.
+**PS1 rips are grouped into titles**, so a three-disc release is one entry
+rather than three. Source directories are browsing locations, never a record of
+what is installed — only the HDD decides that.
 
 ![PS1 source browser showing multi-disc grouping](docs/screenshots/ps1-source.png)
 
