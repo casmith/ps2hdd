@@ -43,7 +43,13 @@ command established.`,
 
 			var games []model.Game
 			if fromSource {
-				c, _ := env.Svc.Catalog(ctx)
+				// The catalog error is not discardable here: a library
+				// that could not be read reports every title as available,
+				// and this is the path that writes to the disk.
+				c, _, err := env.Svc.Catalog(ctx)
+				if err != nil {
+					return err
+				}
 				for _, q := range args {
 					g, err := resolveSource(c, q)
 					if err != nil {

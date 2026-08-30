@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,12 +181,84 @@ func TestHintedSerial(t *testing.T) {
 		"ata-WDC_WD1200JB-00REA0_WD-WCANM1234567-part1": "WD-WCANM1234567",
 		"wwn-0x50014ee2b3c4d5e6":                        "",
 		"dm-name-luks-1234":                             "",
+		// udev's usb_id appends the SCSI LUN to ID_SERIAL. It is addressing,
+		// not identity, and lsblk reports the serial without it.
+		"usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0": "AAAABBBBCCCC0003",
+		"usb-Generic_Flash_Disk_12345678-0:0":   "12345678",
+		// Only a trailing <digits>:<digits> is a LUN. A hyphen inside a real
+		// serial must survive.
+		"ata-Some_Disk_WD-WCANM1234567": "WD-WCANM1234567",
+		"ata-Some_Disk_ABC-1234":        "ABC-1234",
 	}
 	for in, want := range cases {
 		if got := hintedSerial(in); got != want {
 			t.Errorf("hintedSerial(%q) = %q, want %q", in, got, want)
 		}
 	}
+}
+
+// A USB enclosure names the bridge in ID_SERIAL and the drive in ID_MODEL, so
+// the two halves of a usb- link do not line up the way an ata- link's do.
+func TestModelConsistentAcceptsVendorPrefixedUSBNames(t *testing.T) {
+	// udev builds usb- names as <manufacturer>_<product>_<serial> but sets
+	// ID_MODEL, which is what lsblk reports, to the product alone.
+	if !modelConsistent("usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0", "SSHD") {
+		t.Error("a usb- link was refused against the product half of its own name")
+	}
+	// The vendor-stripped form is an addition, not a replacement.
+	if !modelConsistent("usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0", "SABRENT SSHD") {
+		t.Error("the full name should still match")
+	}
+	// Stripping the vendor must not make unrelated models agree.
+	if modelConsistent("usb-SABRENT_SSHD_AAAABBBBCCCC0003-0:0", "Samsung SSD 860 EVO") {
+		t.Error("an unrelated model was accepted")
+	}
+	// ata- names have no vendor prefix to strip, so nothing changes there.
+	if modelConsistent("ata-WDC_WD1200JB-00REA0_WD-WCANM1234567", "WD1200JB-00REA0") {
+		t.Error("ata- names should not have their first token stripped")
+	}
+}
+
+// An lsblk that cannot reach the udev database reports the raw sysfs INQUIRY
+// strings: a truncated, space-padded model and no serial at all. That is
+// missing evidence, not evidence of a different disk, and it must not produce
+// a refusal on a correct identifier.
+func TestCheckIdentityTreatsMissingSerialAsUnavailable(t *testing.T) {
+	dev := filepath.Join(t.TempDir(), "sdc")
+	if err := os.WriteFile(dev, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lsblk := func(model, serial string) *external.FakeRunner {
+		r := external.NewFakeRunner()
+		r.Responses["lsblk"] = []external.Result{{Stdout: fmt.Sprintf(
+			`{"blockdevices":[{"name":"sdc","path":%q,"type":"disk","size":1024209543168,`+
+				`"model":%q,"serial":%q,"tran":"usb","ro":false}]}`, dev, model, serial)}}
+		return r
+	}
+	const configured = "/dev/disk/by-id/ata-SPCC_Solid_State_Disk_AA000000000000007834"
+	ctx := context.Background()
+
+	t.Run("udev-aware lsblk agrees", func(t *testing.T) {
+		tgt := &Target{Configured: configured, Path: dev}
+		if err := tgt.checkIdentity(ctx, lsblk("SPCC Solid State Disk", "AA000000000000007834")); err != nil {
+			t.Fatalf("matching identity was refused: %v", err)
+		}
+	})
+
+	t.Run("udev-less lsblk is not a contradiction", func(t *testing.T) {
+		tgt := &Target{Configured: configured, Path: dev}
+		if err := tgt.checkIdentity(ctx, lsblk("SSHD            ", "")); err != nil {
+			t.Fatalf("a degraded lsblk caused a refusal: %v", err)
+		}
+	})
+
+	t.Run("a genuinely different serial is still refused", func(t *testing.T) {
+		tgt := &Target{Configured: configured, Path: dev}
+		err := tgt.checkIdentity(ctx, lsblk("SPCC Solid State Disk", "OTHERSERIAL0000"))
+		if !IsRefusal(err) {
+			t.Fatalf("err = %v, want a Refusal", err)
+		}
+	})
 }
 
 func TestModelConsistent(t *testing.T) {

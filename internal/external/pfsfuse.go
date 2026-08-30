@@ -111,6 +111,36 @@ func (p PFS) ListPartitions(ctx context.Context, device string) ([]string, error
 	return ParsePFSShellLs(res.Stdout), nil
 }
 
+// MkPartScript builds the pfsshell command script that creates one PFS
+// partition. Exported and pure so it can be unit tested and shown by
+// --dry-run.
+//
+// pfsshell is an interactive shell driven here through stdin. `mkpart` takes a
+// size ending in M or G and an fs type; PFS is the only type it formats.
+// Larger sizes are not one extent: APA allocates a main partition plus
+// sub-partitions, and pfsshell decides that split itself. Reproducing that
+// allocation here is exactly what this package exists to avoid.
+func MkPartScript(device, name, size, fstype string) string {
+	return "device " + device + "\nmkpart " + name + " " + size + " " + fstype + "\nexit\n"
+}
+
+// CreatePartition creates a PFS partition through pfsshell and returns
+// everything the shell printed.
+//
+// The output is the only thing worth returning, because the exit status is
+// worthless: pfsshell is a shell, so a failed `mkpart` prints
+// "(!) Exit code is -1." and the shell then exits 0 anyway. The caller must
+// confirm the result by re-reading the partition table rather than trusting
+// this to have worked.
+func (p PFS) CreatePartition(ctx context.Context, device, name, size, fstype string) (string, error) {
+	res, err := p.Runner.Run(ctx, Command{
+		Name:       PFSShellTool,
+		Privileged: true,
+		Stdin:      strings.NewReader(MkPartScript(device, name, size, fstype)),
+	})
+	return res.Stdout + res.Stderr, err
+}
+
 // ParsePFSShellLs extracts partition names from pfsshell's `ls` output. The
 // shell echoes prompts and banners around the listing, so only lines that look
 // like APA partition ids are kept.

@@ -105,7 +105,7 @@ func (r Readiness) Status() string {
 func (r Readiness) Explain() []string {
 	var out []string
 	if !r.POPSPartition {
-		out = append(out, fmt.Sprintf("The %s partition does not exist. Create it with a PS2-side tool such as uLaunchELF, or with pfsshell.", POPSPartition))
+		out = append(out, fmt.Sprintf("The %s partition does not exist. Create it with `ps2hdd setup ps1 --create-pops <size>`, or with a PS2-side tool such as uLaunchELF.", POPSPartition))
 	}
 	if !r.CommonPartition {
 		out = append(out, fmt.Sprintf("The %s partition does not exist; the POPS runtime has nowhere to live.", CommonPartition))

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/casmith/ps2hdd/internal/catalog"
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/model"
 )
@@ -83,6 +84,20 @@ func missingTool(err error, tool, feature string) error {
 		return &MissingToolError{Tool: tool, Feature: feature}
 	}
 	return err
+}
+
+// partialAwareMissingTool applies missingTool to the error inside a
+// *catalog.PartialError without discarding the wrapper.
+//
+// The wrapper is what tells a caller the library it also received is real but
+// incomplete. Rewriting a partial pfsfuse failure into a bare MissingToolError
+// would throw that away and make an incomplete read look like a total one.
+func partialAwareMissingTool(err error, tool, feature string) error {
+	var p *catalog.PartialError
+	if errors.As(err, &p) {
+		return &catalog.PartialError{Err: missingTool(p.Err, tool, feature)}
+	}
+	return missingTool(err, tool, feature)
 }
 
 // AmbiguousError is returned when a query names more than one title. It is a

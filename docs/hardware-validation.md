@@ -83,6 +83,7 @@ Use a drive you can reformat.
 | # | Step | Expected |
 |---|---|---|
 | 3.1 | `ps2hdd setup ps1` | Correctly reports which runtime files are present. |
+| 3.1a | `ps2hdd setup ps1 --create-pops 20G` on a drive with no `__.POPS` | The partition is created and appears in `hdl_dump hdl_toc` and in `pfsshell ls` at the size asked for. Re-running is refused. |
 | 3.2 | `ps2hdd setup ps1 --import ~/pops` | Your own POPS.ELF and IOPRP252.IMG are copied to `__common/POPS/`; status becomes READY. |
 | 3.3 | `ps2hdd install game.cue` (single disc, no CD-DA) | Completes. |
 | 3.4 | The resulting VCD | `ls -l` in `__.POPS` shows header + disc size. |

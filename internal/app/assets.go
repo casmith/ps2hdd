@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
+	"github.com/casmith/ps2hdd/internal/apa"
 	"github.com/casmith/ps2hdd/internal/asset"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
@@ -114,6 +116,133 @@ type SetupPS1Options struct {
 }
 
 // SetupPS1Report is the outcome of `ps2hdd setup ps1`.
+// CreatePartitionReport is the outcome of creating an APA partition.
+type CreatePartitionReport struct {
+	Partition string `json:"partition"`
+	Size      string `json:"size"`
+	// Created is true only when the partition was found in the table after the
+	// write, never merely because the tool was run.
+	Created bool `json:"created"`
+	// Script is the pfsshell input that was, or would be, fed in.
+	Script string `json:"script,omitempty"`
+	// Output is everything pfsshell printed, kept so a failure can be
+	// explained in its own words.
+	Output string `json:"output,omitempty"`
+	DryRun bool   `json:"dry_run,omitempty"`
+}
+
+// CreatePOPSPartition creates the __.POPS partition through pfsshell.
+//
+// ps2hdd does not allocate APA space itself -- see the note at the top of
+// internal/apa -- so this delegates to pfsshell exactly as installing a game
+// delegates to hdl_dump. Reproducing APA's main-plus-sub-extent allocation
+// would be reimplementing the one thing this project deliberately does not
+// reimplement.
+//
+// What ps2hdd does add is a check. pfsshell is an interactive shell driven
+// through stdin, so a failed `mkpart` prints "(!) Exit code is -1." and the
+// shell then exits 0 regardless. The exit status carries no information, and
+// the only trustworthy confirmation is reading the partition table back with
+// the native reader.
+func (s *Services) CreatePOPSPartition(ctx context.Context, size string) (CreatePartitionReport, error) {
+	rep := CreatePartitionReport{Partition: ps1.POPSPartition, DryRun: s.DryRun}
+
+	normalised, err := NormalisePartitionSize(size)
+	if err != nil {
+		return rep, err
+	}
+	rep.Size = normalised
+
+	// The device is revalidated here, immediately before the write, rather
+	// than relying on anything an earlier command established.
+	t, err := s.Target(ctx, true)
+	if err != nil {
+		return rep, err
+	}
+
+	switch has, err := s.hasPartition(t, ps1.POPSPartition); {
+	case err != nil:
+		return rep, err
+	case has:
+		return rep, fmt.Errorf("%s already exists on %s", ps1.POPSPartition, t.Configured)
+	}
+
+	rep.Script = external.MkPartScript(t.Path, ps1.POPSPartition, normalised, "PFS")
+	if s.DryRun {
+		return rep, nil
+	}
+
+	s.hddLock.Lock()
+	defer s.hddLock.Unlock()
+
+	out, runErr := s.PFS.CreatePartition(ctx, t.Path, ps1.POPSPartition, normalised, "PFS")
+	rep.Output = out
+	if runErr != nil {
+		return rep, fmt.Errorf("run pfsshell: %w", runErr)
+	}
+
+	has, err := s.hasPartition(t, ps1.POPSPartition)
+	if err != nil {
+		return rep, fmt.Errorf("confirm %s was created: %w", ps1.POPSPartition, err)
+	}
+	if !has {
+		return rep, fmt.Errorf("pfsshell did not create %s. It reported:\n%s",
+			ps1.POPSPartition, strings.TrimSpace(out))
+	}
+	rep.Created = true
+	return rep, nil
+}
+
+// hasPartition reports whether the table currently holds a main partition with
+// this id. It re-reads the device every time: it is used to check the state
+// both before and after a write.
+func (s *Services) hasPartition(t *drive.Target, id string) (bool, error) {
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return false, fmt.Errorf("open %s: %w", t.Path, err)
+	}
+	defer f.Close()
+	toc, err := apa.ReadTOC(f, t.SizeBytes)
+	if err != nil {
+		return false, err
+	}
+	_, _, ok := toc.Find(id)
+	return ok, nil
+}
+
+// NormalisePartitionSize validates a partition size and returns it in the form
+// pfsshell expects.
+//
+// pfsshell wants a whole number followed by M or G. APA allocates in 128 MiB
+// chunks, so a size that is not a whole number of chunks cannot be honoured as
+// written; rejecting it is better than silently handing back something other
+// than what was asked for. Every whole number of gigabytes qualifies.
+func NormalisePartitionSize(size string) (string, error) {
+	v := strings.ToUpper(strings.TrimSpace(size))
+	if v == "" {
+		return "", fmt.Errorf("a partition size is required, for example 20G")
+	}
+	unit := v[len(v)-1]
+	if unit != 'M' && unit != 'G' {
+		return "", fmt.Errorf("partition size %q must end in M or G, for example 20G", size)
+	}
+	n, err := strconv.Atoi(v[:len(v)-1])
+	if err != nil || n <= 0 {
+		return "", fmt.Errorf("partition size %q is not a positive whole number, for example 20G", size)
+	}
+	mb := n
+	if unit == 'G' {
+		mb = n * 1024
+	}
+	if mb < apa.ChunkMB {
+		return "", fmt.Errorf("partition size %q is smaller than APA's %d MiB allocation unit", size, apa.ChunkMB)
+	}
+	if mb%apa.ChunkMB != 0 {
+		return "", fmt.Errorf("partition size %q is not a multiple of APA's %d MiB allocation unit", size, apa.ChunkMB)
+	}
+	return v, nil
+}
+
 type SetupPS1Report struct {
 	Readiness ps1.Readiness `json:"readiness"`
 	// Imported lists runtime files copied in.

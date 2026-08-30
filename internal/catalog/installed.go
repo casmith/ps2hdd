@@ -22,6 +22,19 @@ type InstalledReader struct {
 	Mounts *drive.MountManager
 }
 
+// PartialError reports that some of the installed library was read and some
+// was not.
+//
+// The distinction matters more than it looks. A caller that cannot tell a
+// partial read from a complete one will treat the missing half as "not
+// installed", and the install path acts on exactly that judgement. Anything
+// that fails without this wrapper means nothing could be read at all.
+type PartialError struct{ Err error }
+
+func (e *PartialError) Error() string { return e.Err.Error() }
+
+func (e *PartialError) Unwrap() error { return e.Err }
+
 // PS2Games lists the installed HDLoader titles.
 func (r InstalledReader) PS2Games(ctx context.Context) ([]model.Game, error) {
 	f, err := os.Open(r.Target.Path)
@@ -151,14 +164,20 @@ func (r InstalledReader) hasPartition(id string) (bool, error) {
 func (r InstalledReader) All(ctx context.Context) ([]model.Game, error) {
 	ps2Games, err := r.PS2Games(ctx)
 	if err != nil {
+		// The PS2 half is read natively from the APA table. If that fails
+		// there is no library to report, and saying so is the whole point:
+		// an empty list is indistinguishable from an empty disk, and callers
+		// that write act on that difference.
 		return nil, err
 	}
 	ps1Games, err := r.PS1Games(ctx)
 	if err != nil {
 		// PS1 enumeration needs a FUSE mount, which can fail for reasons that
 		// have nothing to do with the PS2 half of the library. Reporting the
-		// PS2 games plus the reason is more useful than reporting nothing.
-		return ps2Games, fmt.Errorf("list PS1 games: %w", err)
+		// PS2 games plus the reason is more useful than reporting nothing --
+		// but it is flagged as partial so a caller can tell the difference
+		// between "this is the library" and "this is most of the library".
+		return ps2Games, &PartialError{Err: fmt.Errorf("list PS1 games: %w", err)}
 	}
 	all := append(ps2Games, ps1Games...)
 	model.SortGames(all)

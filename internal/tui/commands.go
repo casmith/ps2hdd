@@ -16,8 +16,8 @@ import (
 func (m *Model) loadCatalog() tea.Cmd {
 	svc, ctx := m.svc, m.ctx
 	return func() tea.Msg {
-		c, warnings := svc.Catalog(ctx)
-		return catalogLoadedMsg{catalog: c, warnings: warnings}
+		c, warnings, err := svc.Catalog(ctx)
+		return catalogLoadedMsg{catalog: c, warnings: warnings, err: err}
 	}
 }
 
