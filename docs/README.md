@@ -1,5 +1,8 @@
 # ps2hdd documentation
 
+- [dependencies.md](dependencies.md) — installing the external tools
+  (`hdl_dump`, `pfsfuse`) on Arch, Debian and Fedora, what each is needed for,
+  and the failure modes worth recognising.
 - [compatibility.md](compatibility.md) — every upstream fact ps2hdd depends on,
   with its source: the APA and HDLoader on-disk layouts, `hdl_dump` syntax and
   output formats, `pfsfuse` usage, OPL's artwork naming and sizes, the

@@ -17,20 +17,24 @@ import (
 // ErrNotPS2 means the image has no PS2 boot record.
 var ErrNotPS2 = errors.New("not a PlayStation 2 disc image")
 
-// cdSizeLimit is the largest a PS2 CD image can be. The medium tops out at a
-// 700 MB CD-ROM, so anything above this was mastered for DVD. hdl_dump needs
-// the distinction to choose inject_cd or inject_dvd, and getting it wrong
-// produces a game the console will not boot.
+// cdSizeLimit is the largest a PS2 CD image can plausibly be. The medium tops
+// out at a 700 MB CD-ROM, so anything above this was mastered for DVD.
+//
+// This is only a fallback. The authoritative signal is the CD-ROM XA
+// signature in the volume descriptor -- see MediaType below.
 const cdSizeLimit = 750 * 1024 * 1024
 
 // Image is the result of inspecting a PS2 disc image.
 type Image struct {
-	Path      string
-	GameID    string
-	Title     string
-	VolumeID  string
-	Media     model.MediaType
-	SizeBytes int64
+	Path     string
+	GameID   string
+	Title    string
+	VolumeID string
+	Media    model.MediaType
+	// MediaFromSize records that the media type was inferred from the image
+	// size because the volume descriptor gave no usable signature.
+	MediaFromSize bool
+	SizeBytes     int64
 	// BootFile is the raw BOOT2 value, kept for diagnostics.
 	BootFile string
 }
@@ -99,12 +103,35 @@ func Inspect(path string) (Image, error) {
 	if vs := vol.SizeBytes(); vs > 0 && vs < img.SizeBytes {
 		img.SizeBytes = vs
 	}
-	img.Media = model.MediaDVD
-	if img.SizeBytes <= cdSizeLimit {
-		img.Media = model.MediaCD
-	}
+	img.Media, img.MediaFromSize = MediaType(vol, img.SizeBytes)
 	img.Title = TitleFromPath(path, img.VolumeID)
 	return img, nil
+}
+
+// MediaType decides whether an image was mastered for CD or DVD, and reports
+// whether it had to fall back to guessing from the size.
+//
+// The distinction matters: hdl_dump takes a different verb for each
+// (inject_cd vs inject_dvd), and installing a DVD image as a CD produces a
+// game the console will not boot.
+//
+// Every PlayStation CD is a CD-ROM XA disc and carries the "CD-XA001"
+// signature in the volume descriptor's application area; a DVD leaves that
+// area blank. That signature, not the image size, is the real answer, and it
+// is what hdl_dump itself uses (isofs.c, isofs_detect_media_type). Size is
+// kept only for images whose XA area holds something else entirely, which
+// happens with unusual mastering tools.
+func MediaType(vol *iso9660.Volume, sizeBytes int64) (media model.MediaType, guessed bool) {
+	switch {
+	case vol.IsCDXA():
+		return model.MediaCD, false
+	case vol.XAMarkerIsBlank():
+		return model.MediaDVD, false
+	case sizeBytes <= cdSizeLimit:
+		return model.MediaCD, true
+	default:
+		return model.MediaDVD, true
+	}
 }
 
 // ParseSystemCNF returns the value of a SYSTEM.CNF key.

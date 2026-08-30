@@ -24,16 +24,22 @@ type Image struct {
 	// PadBlocks extends the image past its content, which is how a test makes
 	// an image big enough to be classified as a DVD.
 	PadBlocks uint32
+	// CDXA writes the CD-ROM XA signature into the volume descriptor. Every
+	// real PlayStation CD carries it and no DVD does, so it is what decides
+	// the media type; leaving it false produces a DVD-shaped image.
+	CDXA bool
 }
 
 // Layout constants. Blocks 0-15 are the system area, 16 is the primary volume
-// descriptor, 17 the terminator, 18 the root directory, and file data starts
-// at 19.
+// descriptor, 17 the terminator, 18 and 19 the two path tables, 20 the root
+// directory, and file data starts at 21.
 const (
 	pvdLBA        = 16
 	terminatorLBA = 17
-	rootLBA       = 18
-	firstFileLBA  = 19
+	pathTableLLBA = 18
+	pathTableMLBA = 19
+	rootLBA       = 20
+	firstFileLBA  = 21
 )
 
 // Build renders the image as a byte slice of 2048-byte logical blocks.
@@ -89,7 +95,28 @@ func Build(img Image) ([]byte, error) {
 	putBoth16(pvd[120:], 1) // volume set size
 	putBoth16(pvd[124:], 1) // volume sequence number
 	putBoth16(pvd[128:], iso9660.LogicalSectorSize)
+
+	// Path tables. internal/iso9660 does not need these -- it finds the root
+	// directory through the record embedded in the PVD at offset 156, which is
+	// equally valid and is what most readers use. Real discs always carry path
+	// tables, though, and some tools navigate exclusively through them:
+	// hdl_dump does, and rejects an image without one as "bad ISOFS". Writing
+	// them keeps these fixtures realistic enough for an independent
+	// implementation to read, which is what makes cross-validation possible.
+	putBoth32(pvd[132:], pathTableSize) // path table size, both-endian
+	putLE32(pvd[140:], pathTableLLBA)   // type-L path table
+	putLE32(pvd[144:], 0)               // optional type-L path table
+	putBE32(pvd[148:], pathTableMLBA)   // type-M path table
+	putBE32(pvd[152:], 0)               // optional type-M path table
+
+	if img.CDXA {
+		copy(pvd[1024:1032], iso9660.XASignature)
+	}
+
 	copy(pvd[156:156+34], rootRecord())
+
+	copy(out[pathTableLLBA*iso9660.LogicalSectorSize:], pathTableRecord(false))
+	copy(out[pathTableMLBA*iso9660.LogicalSectorSize:], pathTableRecord(true))
 
 	term := out[terminatorLBA*iso9660.LogicalSectorSize:][:iso9660.LogicalSectorSize]
 	term[0] = 0xff
@@ -105,9 +132,11 @@ func Build(img Image) ([]byte, error) {
 
 // BuildMode2352 renders the image as a MODE2/2352 CD dump, which is what a PS1
 // BIN file is: each 2048-byte block sits at offset 24 of a 2352-byte sector.
+// PS1 discs are always CDs, so the XA signature is written unconditionally.
 // The sync pattern and headers are filled in well enough to look like a real
 // dump to anything that inspects them.
 func BuildMode2352(img Image) ([]byte, error) {
+	img.CDXA = true
 	data, err := Build(img)
 	if err != nil {
 		return nil, err
@@ -140,6 +169,32 @@ func lbaToMSF(lba int) (int, int, int) {
 }
 
 func bcd(v int) byte { return byte((v/10)<<4 | v%10) }
+
+// pathTableSize is the byte length of the single root-directory record these
+// images carry: 8 bytes of fixed fields, a one-byte identifier, and a pad byte
+// to an even length.
+const pathTableSize = 10
+
+// pathTableRecord renders the path table. A root-only disc needs exactly one
+// record, whose identifier is a single NUL byte -- that NUL is how a reader
+// recognises the root (hdl_dump's isofs_get_root_addr tests for it).
+//
+// The type-L table stores its numbers little-endian and the type-M table
+// big-endian; the two are otherwise identical.
+func pathTableRecord(bigEndian bool) []byte {
+	rec := make([]byte, pathTableSize)
+	rec[0] = 1 // length of the directory identifier
+	rec[1] = 0 // extended attribute record length
+	if bigEndian {
+		putBE32(rec[2:], rootLBA)
+		putBE16(rec[6:], 1) // the root's parent is itself, directory number 1
+	} else {
+		putLE32(rec[2:], rootLBA)
+		putLE16(rec[6:], 1)
+	}
+	rec[8] = 0x00 // the root directory identifier
+	return rec
+}
 
 func rootRecord() []byte {
 	b := &bytes.Buffer{}
@@ -180,6 +235,20 @@ func putBoth16(b []byte, v uint16) {
 	b[0], b[1] = byte(v), byte(v>>8)
 	b[2], b[3] = byte(v>>8), byte(v)
 }
+
+// putLE32, putBE32, putLE16 and putBE16 write single-endian fields, which the
+// path table and its PVD pointers use rather than the both-endian form.
+func putLE32(b []byte, v uint32) {
+	b[0], b[1], b[2], b[3] = byte(v), byte(v>>8), byte(v>>16), byte(v>>24)
+}
+
+func putBE32(b []byte, v uint32) {
+	b[0], b[1], b[2], b[3] = byte(v>>24), byte(v>>16), byte(v>>8), byte(v)
+}
+
+func putLE16(b []byte, v uint16) { b[0], b[1] = byte(v), byte(v>>8) }
+
+func putBE16(b []byte, v uint16) { b[0], b[1] = byte(v>>8), byte(v) }
 
 func padCopy(dst []byte, s string) {
 	for i := range dst {

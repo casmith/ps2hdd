@@ -243,12 +243,20 @@ func (q *Queue) nextWaiting() *QueueItem {
 
 func (q *Queue) cancelRemaining() {
 	q.mu.Lock()
-	defer q.mu.Unlock()
+	var pending []QueueItem
 	for _, it := range q.items {
 		if !it.State.Terminal() {
 			it.State = QueueCancelled
 			it.StatusText = "Cancelled"
-			q.notifyLocked(it)
+			pending = append(pending, *it)
+		}
+	}
+	cb := q.onUpdate
+	q.mu.Unlock()
+
+	if cb != nil {
+		for _, snapshot := range pending {
+			cb(snapshot)
 		}
 	}
 }
@@ -263,8 +271,17 @@ func (q *Queue) process(ctx context.Context, it *QueueItem) {
 
 	opts := q.opts
 	opts.OnProgress = func(p Progress) {
+		// The queue owns the terminal state, not the operation's progress
+		// reporting. Install emits a final StageComplete, and letting that
+		// through would mark the item done twice -- which matters because a
+		// consumer reasonably treats QueueComplete as "reload the library",
+		// and would then do it twice per install.
+		state := stateForStage(p.Stage)
+		if state.Terminal() {
+			return
+		}
 		q.update(it, func(i *QueueItem) {
-			i.State = stateForStage(p.Stage)
+			i.State = state
 			i.Progress = p.Fraction
 			i.StatusText = stageText(p)
 		})
@@ -313,17 +330,28 @@ func stageText(p Progress) string {
 	}
 }
 
+// update mutates an item under the lock, then delivers the change to the
+// callback with the lock released.
+//
+// The callback runs synchronously and in order. An earlier version spawned a
+// goroutine per notification to avoid calling out while holding the lock,
+// which meant progress updates could arrive out of order -- a later
+// percentage overtaking an earlier one, or a "complete" landing before the
+// "installing" that preceded it. Taking the snapshot under the lock and
+// calling out after releasing it gets both properties: no call-out under lock,
+// and ordered delivery.
+//
+// A callback must therefore not block for long. The interface's is a
+// non-blocking channel send, which is the intended shape.
 func (q *Queue) update(it *QueueItem, f func(*QueueItem)) {
 	q.mu.Lock()
 	f(it)
-	q.notifyLocked(it)
+	snapshot := *it
+	cb := q.onUpdate
 	q.mu.Unlock()
-}
 
-func (q *Queue) notifyLocked(it *QueueItem) {
-	if q.onUpdate != nil {
-		snapshot := *it
-		go q.onUpdate(snapshot)
+	if cb != nil {
+		cb(snapshot)
 	}
 }
 

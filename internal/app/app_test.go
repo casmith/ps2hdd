@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/casmith/ps2hdd/internal/app"
@@ -404,13 +405,20 @@ func TestQueueRunsInstallsInOrder(t *testing.T) {
 
 	q := app.NewQueue(svc, app.InstallOptions{})
 	done := make(chan struct{})
+	// An item can report completion more than once, and callbacks may run
+	// concurrently, so the close is guarded by a Once rather than a
+	// check-then-act on the channel.
+	var once sync.Once
+	var seen []app.QueueState
+	var seenMu sync.Mutex
 	q.OnUpdate(func(it app.QueueItem) {
+		seenMu.Lock()
+		if it.ID == 1 {
+			seen = append(seen, it.State)
+		}
+		seenMu.Unlock()
 		if it.State == app.QueueComplete && it.ID == 2 {
-			select {
-			case <-done:
-			default:
-				close(done)
-			}
+			once.Do(func() { close(done) })
 		}
 	})
 	q.Add(games...)
@@ -423,6 +431,25 @@ func TestQueueRunsInstallsInOrder(t *testing.T) {
 	complete, failed, _ := q.Summary()
 	if complete != 2 || failed != 0 {
 		t.Errorf("queue finished with %d complete, %d failed: %+v", complete, failed, q.Items())
+	}
+
+	// Progress must be delivered in order, and an item must be announced
+	// complete exactly once and last. A consumer treats QueueComplete as
+	// "reload the library", so a duplicate costs a redundant HDD read.
+	seenMu.Lock()
+	defer seenMu.Unlock()
+	completes := 0
+	for i, st := range seen {
+		if st != app.QueueComplete {
+			continue
+		}
+		completes++
+		if i != len(seen)-1 {
+			t.Errorf("item 1 reported %v after completing: %v", seen[i+1:], seen)
+		}
+	}
+	if completes != 1 {
+		t.Errorf("item 1 announced complete %d times, want 1: %v", completes, seen)
 	}
 	installed, err := svc.InstalledPS2(ctx)
 	if err != nil {

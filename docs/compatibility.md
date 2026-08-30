@@ -106,11 +106,29 @@ than newlines, so `internal/external` splits its output on `\r` as well as
 `\n`. When no percentage is present the interface shows an indeterminate
 spinner; it never invents a number.
 
-**Media type is never guessed.** `inject_cd` and `inject_dvd` produce different
-partitions, and choosing wrongly yields a game the console will not boot. ps2hdd
-classifies from the ISO 9660 volume space size (over 750 MiB means DVD, since
-the CD medium tops out below that) and refuses to install when the type is
-genuinely unknown.
+**Media type comes from the disc, not its size.** `inject_cd` and `inject_dvd`
+produce different partitions, and choosing wrongly yields a game the console
+will not boot.
+
+Every PlayStation CD is a CD-ROM XA disc and carries the signature `CD-XA001`
+at offset 1024 of the primary volume descriptor, in the "application used"
+area; a DVD leaves those eight bytes blank. That signature is the answer, and
+it is what hdl_dump uses (`isofs.c`, `isofs_detect_media_type`):
+
+| bytes at PVD offset 1024 | media |
+|---|---|
+| `CD-XA001` | CD |
+| eight NUL bytes | DVD |
+| anything else | inconclusive |
+
+ps2hdd follows the same rule, and falls back to a size heuristic (over 750 MiB
+means DVD) only for the inconclusive case, flagging the result as a guess.
+
+An earlier version of ps2hdd used the size heuristic alone. That was wrong in
+both directions -- a mostly-empty DVD rip reads as a CD, a padded CD image
+reads as a DVD -- and was caught by running `hdl_dump cdvd_info2` against the
+same images and comparing. `scripts/crosscheck-hdl.sh` automates the
+equivalent check for the installed-game list.
 
 ---
 
@@ -291,6 +309,12 @@ explanation rather than converted into an image that would not boot.
 Identity always comes from the disc, never from the filename.
 
 - **PS2**: ISO 9660 at 2048 bytes per sector; `SYSTEM.CNF`'s `BOOT2` line.
+  The reader finds the root directory through the record embedded in the volume
+  descriptor at offset 156. Some tools instead navigate exclusively through the
+  ISO 9660 *path table* -- hdl_dump does, and rejects an image without one as
+  "bad ISOFS" -- so `internal/iso9660/isosynth` writes path tables even though
+  nothing in ps2hdd reads them. Without that, an independent implementation
+  cannot read the test fixtures, and cross-validation is impossible.
 - **PS1**: ISO 9660 inside MODE2/2352 (user data at offset 24 of each 2352-byte
   sector); `SYSTEM.CNF`'s `BOOT` line. A 2048-byte layout is tried as a
   fallback for converted images.
@@ -335,6 +359,24 @@ Templates understand `{serial}` (dashed), `{serial_opl}`, `{serial_plain}`,
 `{type}` and `{platform}`.
 
 ---
+
+## Install queue
+
+Raw-HDD mutations are serialised: `hdl_dump` writes the APA table directly and
+makes no promise about concurrent writers to one disk. Artwork downloads inside
+an install are still concurrent, which is where the parallelism actually helps.
+
+Progress is delivered to the queue's callback **synchronously and in order**,
+with the queue's lock released. An earlier version spawned a goroutine per
+notification, which meant a later percentage could overtake an earlier one, or
+a "complete" could land before the stage that preceded it.
+
+An item is announced complete **exactly once**. The operation's own progress
+reporting emits a final `StageComplete`, but the queue owns terminal state and
+drops it: a consumer reasonably treats "complete" as "reload the library", and
+a duplicate costs a redundant read of the HDD and a redundant PFS mount.
+
+Both properties are asserted by `TestQueueRunsInstallsInOrder`.
 
 ## Deviations from the original plan
 

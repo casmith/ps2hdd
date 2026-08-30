@@ -225,17 +225,21 @@ func (e *Env) buildSources(fresh bool) error {
 	ps2Games := []struct {
 		file, serial string
 		padMB        int
+		// cd marks a CD-XA title. Ridge Racer V really was a PS2 CD, so the
+		// demo carries one of each and the media-type path is exercised.
+		cd bool
 	}{
-		{"Gran Turismo 4.iso", "SCUS_973.28", 900},
-		{"Shadow of the Colossus.iso", "SCUS_974.72", 800},
-		{"Ridge Racer V.iso", "SLUS_200.02", 8},
-		{"Burnout 3 Takedown.iso", "SLUS_210.50", 850},
+		{"Gran Turismo 4.iso", "SCUS_973.28", 900, false},
+		{"Shadow of the Colossus.iso", "SCUS_974.72", 800, false},
+		{"Ridge Racer V.iso", "SLUS_200.02", 8, true},
+		{"Burnout 3 Takedown.iso", "SLUS_210.50", 850, false},
 	}
 	for _, g := range ps2Games {
 		pad := uint32(g.padMB) * 1024 * 1024 / iso9660.LogicalSectorSize
 		data, err := isosynth.Build(isosynth.Image{
 			VolumeID:  g.serial,
 			PadBlocks: pad,
+			CDXA:      g.cd,
 			Files:     map[string][]byte{"SYSTEM.CNF": isosynth.PS2SystemCNF(g.serial)},
 		})
 		if err != nil {

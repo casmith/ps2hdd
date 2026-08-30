@@ -64,12 +64,24 @@ func Mode2048(r io.ReaderAt) RawSectorReader {
 	return RawSectorReader{R: r, Stride: LogicalSectorSize, Offset: 0}
 }
 
+// xaSignatureOffset is where the CD-ROM XA extension signature sits inside the
+// primary volume descriptor, in the "application used" area.
+const xaSignatureOffset = 1024
+
+// XASignature is the CD-ROM XA marker a CD-XA disc carries.
+const XASignature = "CD-XA001"
+
 // Volume is a parsed primary volume descriptor plus the location of the root
 // directory.
 type Volume struct {
 	VolumeID    string
 	SystemID    string
 	TotalBlocks uint32
+	// XAMarker is the eight bytes at PVD offset 1024. On a CD-ROM XA disc --
+	// which every PlayStation CD is -- it reads "CD-XA001"; on a DVD it is all
+	// zeroes. It is the authoritative way to tell a PS2 CD image from a DVD
+	// image, and is what hdl_dump uses (isofs.c, isofs_detect_media_type).
+	XAMarker string
 
 	rootLBA  uint32
 	rootSize uint32
@@ -79,6 +91,24 @@ type Volume struct {
 // SizeBytes is the volume space size in bytes, i.e. how much of the medium the
 // filesystem claims to occupy.
 func (v *Volume) SizeBytes() int64 { return int64(v.TotalBlocks) * LogicalSectorSize }
+
+// IsCDXA reports whether the volume carries the CD-ROM XA signature.
+func (v *Volume) IsCDXA() bool { return v.XAMarker == XASignature }
+
+// XAMarkerIsBlank reports whether the XA area is all zeroes, which is what a
+// DVD image looks like. An image that is neither is inconclusive: the area is
+// "application used" space and some mastering tools put other things there.
+func (v *Volume) XAMarkerIsBlank() bool {
+	if len(v.XAMarker) != 8 {
+		return false
+	}
+	for i := 0; i < len(v.XAMarker); i++ {
+		if v.XAMarker[i] != 0 {
+			return false
+		}
+	}
+	return true
+}
 
 // Open reads the primary volume descriptor. ISO 9660 puts the descriptor set
 // at logical block 16.
@@ -97,6 +127,7 @@ func Open(r SectorReader) (*Volume, error) {
 				SystemID:    strings.TrimSpace(string(buf[8:40])),
 				VolumeID:    strings.TrimSpace(string(buf[40:72])),
 				TotalBlocks: leU32(buf[80:]),
+				XAMarker:    string(buf[xaSignatureOffset : xaSignatureOffset+8]),
 				r:           r,
 			}
 			// The root directory record is embedded at offset 156 and uses the

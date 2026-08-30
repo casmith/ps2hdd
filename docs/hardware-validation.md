@@ -46,6 +46,18 @@ No writes at all. Safe on any drive.
 the reference implementation must agree; a disagreement means the parser is
 wrong and no write should follow.
 
+`scripts/crosscheck-hdl.sh` does this comparison for you and reports per-game
+agreement:
+
+```sh
+sudo scripts/crosscheck-hdl.sh /dev/disk/by-id/ata-YOUR_DRIVE
+```
+
+It is read-only. You can also run it against a disk image, without any PS2
+hardware at all, by mapping the image to a loop device first — the script
+explains how. Doing that against a copy of your drive is a cheap way to get
+most of the value of this phase before touching the real thing.
+
 ## Phase 2 — write, on a scratch drive
 
 Use a drive you can reformat.
@@ -83,6 +95,19 @@ Use a drive you can reformat.
 | 3.11 | **Swap discs in game** | POPStarter's disc-swap combo moves between them. |
 | 3.12 | `ps2hdd list --ps1` | Shows one title with 2 discs, not two titles. |
 | 3.13 | `ps2hdd remove "Some Game"` | Both VCDs and the DISCS.TXT directory go. |
+
+### Comparing media type against hdl_dump
+
+Installing a DVD image with the CD verb produces a game that will not boot, so
+the media type is worth checking independently:
+
+```sh
+hdl_dump cdvd_info2 game.iso --csv     # first field: CD or DVD
+ps2hdd info game.iso                   # the Media row
+```
+
+They must agree. ps2hdd reads the CD-ROM XA signature from the volume
+descriptor, the same way hdl_dump does; see `docs/compatibility.md`.
 
 ### Comparing against cue2pops
 

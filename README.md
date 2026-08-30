@@ -68,6 +68,9 @@ working read-only browser rather than a broken program.
 | `fusermount3` | releasing those mounts | `fuse3` |
 
 `ps2hdd doctor` tells you which are missing and what each one is for.
+**`docs/dependencies.md` has per-distribution install instructions**, including
+two things that are easy to get wrong: `pfsfuse` is off by default in the
+pfsshell build, and it wants FUSE 2 rather than FUSE 3.
 
 BIN/CUE to VCD conversion is built in; no `cue2pops` needed.
 
@@ -334,6 +337,16 @@ Hardware tests are separate and read-only:
 PS2HDD_TEST_DEVICE=/dev/disk/by-id/ata-YOUR_DRIVE go test -tags=hardware ./internal/drive/
 ```
 
+The native APA reader can also be checked against `hdl_dump`, which is the
+single most valuable verification in the project — everything else stands on
+that read path:
+
+```sh
+sudo scripts/crosscheck-hdl.sh /dev/disk/by-id/ata-YOUR_DRIVE
+```
+
+It works against a disk image too, via a loop device; the script explains how.
+
 **No test in this repository writes to a block device.** Write coverage is the
 manual checklist in `docs/hardware-validation.md`.
 
@@ -361,6 +374,7 @@ Tea `Update`. Every `exec.Command` is in `internal/external`.
 
 ### Further reading
 
+- `docs/dependencies.md` — installing `hdl_dump` and `pfsfuse`, per distribution
 - `docs/compatibility.md` — every upstream fact this depends on, with sources
 - `docs/safety.md` — the safety model and how to grant access properly
 - `docs/hardware-validation.md` — the manual checklist

@@ -13,10 +13,17 @@ import (
 )
 
 func writeISO(t *testing.T, name, serial string, padBlocks uint32) string {
+	return writeISOMedia(t, name, serial, padBlocks, false)
+}
+
+// writeISOMedia writes an image, optionally carrying the CD-ROM XA signature
+// that marks it as a CD.
+func writeISOMedia(t *testing.T, name, serial string, padBlocks uint32, cdxa bool) string {
 	t.Helper()
 	data, err := isosynth.Build(isosynth.Image{
 		VolumeID:  serial,
 		PadBlocks: padBlocks,
+		CDXA:      cdxa,
 		Files: map[string][]byte{
 			"SYSTEM.CNF": isosynth.PS2SystemCNF(serial),
 			serial:       []byte("boot elf"),
@@ -33,7 +40,7 @@ func writeISO(t *testing.T, name, serial string, padBlocks uint32) string {
 }
 
 func TestInspectCD(t *testing.T) {
-	path := writeISO(t, "Ridge Racer V.iso", "SLUS_200.02", 0)
+	path := writeISOMedia(t, "Ridge Racer V.iso", "SLUS_200.02", 0, true)
 	img, err := ps2.Inspect(path)
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
@@ -42,7 +49,10 @@ func TestInspectCD(t *testing.T) {
 		t.Errorf("GameID = %q", img.GameID)
 	}
 	if img.Media != model.MediaCD {
-		t.Errorf("Media = %q, want cd for a small image", img.Media)
+		t.Errorf("Media = %q, want cd for a CD-XA image", img.Media)
+	}
+	if img.MediaFromSize {
+		t.Error("the media type was guessed from the size despite an XA signature")
 	}
 	if img.Title != "Ridge Racer V" {
 		t.Errorf("Title = %q", img.Title)
@@ -53,15 +63,17 @@ func TestInspectCD(t *testing.T) {
 }
 
 func TestInspectDVD(t *testing.T) {
-	// Pad past the CD size limit so the image must be classified as a DVD.
-	pad := uint32(800 * 1024 * 1024 / iso9660.LogicalSectorSize)
-	path := writeISO(t, "Burnout 3 Takedown.iso", "SLUS_210.50", pad)
+	// No XA signature: a blank XA area is what a DVD image looks like.
+	path := writeISO(t, "Burnout 3 Takedown.iso", "SLUS_210.50", 0)
 	img, err := ps2.Inspect(path)
 	if err != nil {
 		t.Fatalf("Inspect: %v", err)
 	}
 	if img.Media != model.MediaDVD {
-		t.Errorf("Media = %q, want dvd for an 800 MB image", img.Media)
+		t.Errorf("Media = %q, want dvd for an image with a blank XA area", img.Media)
+	}
+	if img.MediaFromSize {
+		t.Error("the media type was guessed despite a conclusive blank XA area")
 	}
 	g := img.Game()
 	if g.Platform != model.PlatformPS2 || g.DiscCount() != 1 {
@@ -128,6 +140,76 @@ func TestCleanTitle(t *testing.T) {
 	for in, want := range cases {
 		if got := ps2.CleanTitle(in); got != want {
 			t.Errorf("CleanTitle(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// The XA signature decides the media type, not the image size. A small DVD
+// image and a large CD image are both real -- a mostly-empty DVD rip, or a CD
+// image padded by a ripper -- and getting this wrong installs a game with the
+// wrong hdl_dump verb, which will not boot.
+func TestMediaTypeIgnoresSizeWhenTheSignatureIsConclusive(t *testing.T) {
+	// A tiny image with no XA signature is still a DVD.
+	small := writeISO(t, "small.iso", "SLUS_200.03", 0)
+	img, err := ps2.Inspect(small)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Media != model.MediaDVD {
+		t.Errorf("small blank-XA image = %q, want dvd", img.Media)
+	}
+
+	// A large image that carries the XA signature is still a CD.
+	pad := uint32(800 * 1024 * 1024 / iso9660.LogicalSectorSize)
+	big := writeISOMedia(t, "big.iso", "SLUS_200.04", pad, true)
+	img, err = ps2.Inspect(big)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img.Media != model.MediaCD {
+		t.Errorf("large CD-XA image = %q, want cd", img.Media)
+	}
+	if img.MediaFromSize {
+		t.Error("MediaFromSize set despite a conclusive signature")
+	}
+}
+
+// When the XA area holds neither the signature nor zeroes there is nothing
+// authoritative to go on, and the size heuristic takes over -- flagged as a
+// guess so callers can say so.
+func TestMediaTypeFallsBackToSize(t *testing.T) {
+	dir := t.TempDir()
+	for _, tc := range []struct {
+		name string
+		pad  uint32
+		want model.MediaType
+	}{
+		{"junk-small.iso", 0, model.MediaCD},
+		{"junk-big.iso", uint32(800 * 1024 * 1024 / iso9660.LogicalSectorSize), model.MediaDVD},
+	} {
+		data, err := isosynth.Build(isosynth.Image{
+			VolumeID:  "SLUS_200.05",
+			PadBlocks: tc.pad,
+			Files:     map[string][]byte{"SYSTEM.CNF": isosynth.PS2SystemCNF("SLUS_200.05")},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Scribble something inconclusive over the XA area of the descriptor.
+		copy(data[16*iso9660.LogicalSectorSize+1024:], "MASTERED")
+		path := filepath.Join(dir, tc.name)
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		img, err := ps2.Inspect(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if img.Media != tc.want {
+			t.Errorf("%s: media = %q, want %q", tc.name, img.Media, tc.want)
+		}
+		if !img.MediaFromSize {
+			t.Errorf("%s: MediaFromSize not set for an inconclusive signature", tc.name)
 		}
 	}
 }
