@@ -491,7 +491,7 @@ automatic partition repair; cheats; Windows.
 
 ## Licence
 
-GPL-3.0-or-later. See `LICENSE`.
+Apache-2.0. See `LICENSE`.
 
 ps2hdd is not affiliated with Sony Interactive Entertainment. It bundles no
 Sony code and no game data.
