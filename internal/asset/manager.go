@@ -258,13 +258,15 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 // is a file the console cannot draw. The xlenore collections PCSX2 uses are
 // all JPEG.
 //
-// It has to be the documented size. OPL's art slots have exact dimensions --
-// 140x200 for a PS2 front cover, 64x64 for the disc -- and a source that
-// ignores them produces art that renders inconsistently or not at all: the
-// xlenore covers are 512x736, which is thirteen times the pixels of the slot
-// they are being written into, on a console with 32 MB of RAM. Whatever the
-// source gives is scaled to the slot. model.Dimensions is the authority, and
-// a slot it does not pin is written through at its natural size.
+// It has to be the documented size, and undersized is not the failure mode --
+// oversized is. OPL's texSizeValidate (src/textures.c) refuses any texture
+// costing more than maxSize = 720*512*4 = 1,474,560 bytes, returns
+// ERR_BAD_DIMENSION, and draws nothing at all with no message. The xlenore
+// covers are 512x736, which as truecolor RGB is 1,507,328 bytes: over the
+// limit by 2%, and silently invisible on the console. Whatever the source
+// gives is scaled to the slot. model.Dimensions is the authority, and a slot
+// it does not pin is written through at its natural size. See
+// docs/compatibility.md for the arithmetic.
 //
 // CFG entries are text and are copied untouched.
 func writeForOPL(out io.Writer, in io.Reader, platform model.Platform, t model.AssetType) (int64, error) {

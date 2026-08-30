@@ -350,6 +350,19 @@ partition name. `ps2hdd status --partitions` lists what is actually there.
 `+OPL/ART`. OPL wants `SLUS_209.46_COV.png`; older guides describe `BG_00` and
 `SCR_00`, which current OPL does not read.
 
+**Some art appears and some does not** — check the dimensions, not the
+filenames. OPL silently refuses any texture over 1,474,560 bytes, so an
+oversized cover is dropped with no message while a 64x64 disc from the same
+sync renders fine. `file +OPL/ART/*_COV.png` should say `140 x 200`. ps2hdd
+scales art to the slot on install, so this means the files predate that or came
+from elsewhere; `ps2hdd art sync --all --overwrite` replaces them. See
+`docs/compatibility.md`.
+
+**No artwork at all, from a console that used to show it** — OPL gates covers
+behind Display Settings → Enable Cover Art, and the device holding the ART must
+be enabled there too. Rule this out before suspecting the files: it is quick,
+and it is not something ps2hdd can see.
+
 **A game will not boot after installing** — check `ps2hdd info <serial>` shows
 the right media type. A DVD image installed as a CD will not boot.
 

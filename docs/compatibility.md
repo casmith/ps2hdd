@@ -425,13 +425,50 @@ re-encoded rather than copied into a name they do not match. Anything that
 cannot be decoded as an image is refused rather than written: a file the
 console cannot draw is worse than an absent one, because it looks installed.
 
-It has to be the documented size. OPL's slots have exact dimensions -- 140x200
-for a PS2 front cover, 64x64 for the disc -- and a source that ignores them
-gives art that renders inconsistently or not at all. The xlenore covers are
-512x736, thirteen times the pixels of the slot they go into, on a console with
-32 MB of RAM. Whatever the source gives is scaled to the slot; a PNG already at
-the right size is copied through untouched, so a database built for OPL stays
-byte-identical to what it published.
+It has to be the documented size, and this is the part with teeth. OPL's slots
+have exact dimensions -- 140x200 for a PS2 front cover, 64x64 for the disc --
+and art that ignores them is not merely ugly. It is silently dropped.
+
+`texLoadAll` in OPL's `src/textures.c` validates every texture before it is
+drawn:
+
+```c
+static int maxSize = 720 * 512 * 4;   /* 1,474,560 bytes */
+
+static int texSizeValidate(int width, int height, u8 psm)
+{
+    if (width > 1024 || height > 1024)
+        return -1;
+    if (gsKit_texture_size(width, height, (int)psm) > maxSize)
+        return -1;
+    return 0;
+}
+```
+
+A texture that fails returns `ERR_BAD_DIMENSION`, is freed, and nothing is
+drawn. No message reaches the screen, and the slot simply looks empty.
+
+The bytes per pixel come from the PNG's colour type, which OPL maps to a GS
+pixel format: truecolor RGB becomes `GS_PSM_CT24` at 4 bytes, palette becomes
+`GS_PSM_T8` at 1. So the same image costs four times as much as a truecolor
+PNG as it does paletted:
+
+| Art | Format | Texture | Against 1,474,560 |
+|---|---|---|---|
+| xlenore cover, 512x736 | CT24 | 1,507,328 | **rejected, by 2%** |
+| the same scaled to 140x200 | CT24 | 112,000 | fine |
+| opl-art cover, 140x200 paletted | T8 | 28,000 | fine |
+| disc, 64x64 paletted | T8 | 4,096 | fine |
+
+That 2% is the whole difference between a library with covers and one without,
+which is why installing scales to the slot rather than trusting the source.
+Discs at 64x64 were never anywhere near the limit, so a drive could show every
+disc and no cover at all and look, from the console, like a display setting was
+switched off.
+
+Whatever the source gives is scaled to the slot. A PNG already at the right
+size is copied through untouched, so a database built for OPL -- `opl-art` is
+one -- stays byte-identical to what it published, palette and all.
 
 Templates understand `{serial}` (dashed), `{serial_opl}`, `{serial_plain}`,
 `{type}` and `{platform}`.
