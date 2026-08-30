@@ -19,6 +19,14 @@ import (
 type Provider interface {
 	// Name identifies the provider in configuration and diagnostics.
 	Name() string
+	// Supports reports every asset type this provider can ever supply,
+	// regardless of game.
+	//
+	// It is what lets the difference between "this game has no back cover"
+	// and "this provider has no back covers" reach the user. Without it a
+	// slot the provider cannot serve reads as a gap the user could close, and
+	// no amount of syncing ever closes it.
+	Supports() []model.AssetType
 	// Lookup reports which of the wanted asset types this provider can supply
 	// for a game. It must not download anything.
 	Lookup(ctx context.Context, game model.Game, want []model.AssetType) (model.AssetSet, error)
@@ -49,6 +57,7 @@ type Options struct {
 // NewRegistry returns a registry with the built-in providers.
 func NewRegistry() *Registry {
 	r := &Registry{factories: map[string]func(Options) (Provider, error){}}
+	r.Register("opl-art", newOPLArt)
 	r.Register("ps2-covers", newPS2Covers)
 	r.Register("http", newHTTPTemplate)
 	r.Register("local", newLocal)
@@ -93,6 +102,22 @@ func (c Chain) Name() string {
 		names = append(names, p.Name())
 	}
 	return strings.Join(names, "+")
+}
+
+// Supports implements Provider: the union of what the chain's members can
+// supply, since any one of them filling a slot is enough.
+func (c Chain) Supports() []model.AssetType {
+	seen := map[model.AssetType]bool{}
+	var out []model.AssetType
+	for _, p := range c.Providers {
+		for _, t := range p.Supports() {
+			if !seen[t] {
+				seen[t] = true
+				out = append(out, t)
+			}
+		}
+	}
+	return out
 }
 
 // Lookup implements Provider, preferring earlier providers for each type.
@@ -152,4 +177,26 @@ func (c Chain) Check(ctx context.Context) error {
 		}
 	}
 	return lastErr
+}
+
+// Supports reports whether a provider can ever supply an asset type.
+func Supports(p Provider, t model.AssetType) bool {
+	for _, s := range p.Supports() {
+		if s == t {
+			return true
+		}
+	}
+	return false
+}
+
+// Unsupported returns the wanted types this provider cannot supply, in the
+// order given.
+func Unsupported(p Provider, want []model.AssetType) []model.AssetType {
+	var out []model.AssetType
+	for _, t := range want {
+		if !Supports(p, t) {
+			out = append(out, t)
+		}
+	}
+	return out
 }

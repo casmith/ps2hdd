@@ -93,6 +93,17 @@ func newAssetStatusCommand(env *Env, artOnly bool) *cobra.Command {
 				}
 			}
 			env.printf("\n%d of %d games have every enabled slot.\n", complete, len(rows))
+
+			// Named once, as a setup note. A slot the provider cannot supply
+			// is not a per-game gap and must not read like one.
+			if _, unavailable := env.Svc.WantedAndUnavailable(); len(unavailable) > 0 {
+				names := make([]string, 0, len(unavailable))
+				for _, t := range unavailable {
+					names = append(names, string(t))
+				}
+				env.printf("\n%s %s enabled but not supplied by the %s provider, so not shown above.\n",
+					dim("note:"), strings.Join(names, ", "), env.Config.Assets.Provider)
+			}
 			return nil
 		},
 	}

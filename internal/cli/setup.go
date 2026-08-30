@@ -289,8 +289,12 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 			cfg.Assets.Backgrounds = b
 		case "assets.screenshots":
 			cfg.Assets.Screenshots = b
-		case "assets.icons":
-			cfg.Assets.Icons = b
+		case "assets.back_covers":
+			cfg.Assets.BackCovers = b
+		case "assets.discs", "assets.icons":
+			// `icons` is the former name; both are accepted so a documented
+			// command from an older guide still does what it says.
+			cfg.Assets.Discs = b
 		case "assets.logos":
 			cfg.Assets.Logos = b
 		case "assets.spines":

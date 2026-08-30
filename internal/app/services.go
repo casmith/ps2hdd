@@ -347,11 +347,32 @@ func (s *Services) annotateAssets(ctx context.Context, c *catalog.Catalog) error
 	if err != nil {
 		return err
 	}
+	// A slot the provider cannot supply is not a gap the user can close, and
+	// reporting it as missing artwork makes a healthy library look broken --
+	// permanently, since no sync will ever fill it.
+	p, perr := s.AssetProvider()
+	var unsupported map[model.AssetType]bool
+	if perr == nil {
+		unsupported = map[model.AssetType]bool{}
+		for _, t := range provider.Unsupported(p, want) {
+			unsupported[t] = true
+		}
+	}
+
 	for i := range c.Entries {
 		if !c.Entries[i].Installed {
 			continue
 		}
-		c.Entries[i].MissingAssets = inv.Missing(c.Entries[i].GameID, want)
+		var missing, unavailable []model.AssetType
+		for _, t := range inv.Missing(c.Entries[i].GameID, want) {
+			if unsupported[t] {
+				unavailable = append(unavailable, t)
+				continue
+			}
+			missing = append(missing, t)
+		}
+		c.Entries[i].MissingAssets = missing
+		c.Entries[i].UnavailableAssets = unavailable
 		c.Entries[i].AssetsKnown = true
 	}
 	return nil

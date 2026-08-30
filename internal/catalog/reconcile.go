@@ -11,8 +11,14 @@ import (
 // what artwork it is missing.
 type CatalogEntry struct {
 	model.Game
-	AvailableInSource bool              `json:"available_in_source"`
-	MissingAssets     []model.AssetType `json:"missing_assets,omitempty"`
+	AvailableInSource bool `json:"available_in_source"`
+	// MissingAssets are enabled slots the provider could supply but which are
+	// not on the HDD. These are the real gaps: syncing closes them.
+	MissingAssets []model.AssetType `json:"missing_assets,omitempty"`
+	// UnavailableAssets are enabled slots the configured provider cannot
+	// supply for anyone. They are absent from the HDD too, but no amount of
+	// syncing will change that, so they are not counted as missing artwork.
+	UnavailableAssets []model.AssetType `json:"unavailable_assets,omitempty"`
 	// AssetsKnown records that the artwork inventory was actually read. When
 	// it is false an empty MissingAssets means "not checked", not "complete":
 	// reading +OPL needs pfsfuse, which may not be installed, and reporting a

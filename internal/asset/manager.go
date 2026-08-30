@@ -1,9 +1,14 @@
 package asset
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"image"
+	_ "image/gif"  // registered so a GIF from an odd mirror still converts
+	_ "image/jpeg" // the xlenore cover databases serve JPEG
+	"image/png"
 	"io"
 	"os"
 	"path/filepath"
@@ -216,7 +221,7 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := io.Copy(out, in)
+	n, err := copyAsPNG(out, in, item.Type)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
@@ -225,6 +230,56 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// copyAsPNG writes the asset to out, re-encoding it if it is not already PNG.
+//
+// Art files are named <serial>_COV.png and OPL picks its decoder from that
+// extension, so a JPEG copied byte-for-byte into that name is a file the
+// console cannot draw. Some databases serve JPEG -- the xlenore collections
+// PCSX2 uses are all JPEG -- so the bytes have to be converted rather than
+// trusted to match the name they are being given.
+//
+// CFG entries are text and are copied untouched.
+func copyAsPNG(out io.Writer, in io.Reader, t model.AssetType) (int64, error) {
+	if t == model.AssetConfig {
+		return io.Copy(out, in)
+	}
+
+	head := make([]byte, len(pngMagic))
+	nRead, err := io.ReadFull(in, head)
+	if err != nil && !errors.Is(err, io.EOF) && !errors.Is(err, io.ErrUnexpectedEOF) {
+		return 0, err
+	}
+	body := io.MultiReader(bytes.NewReader(head[:nRead]), in)
+
+	if nRead == len(pngMagic) && bytes.Equal(head, pngMagic) {
+		return io.Copy(out, body)
+	}
+
+	img, format, err := image.Decode(body)
+	if err != nil {
+		return 0, fmt.Errorf("the artwork is neither PNG nor a format that could be decoded: %w", err)
+	}
+	counter := &countingWriter{w: out}
+	if err := png.Encode(counter, img); err != nil {
+		return 0, fmt.Errorf("re-encode %s artwork as PNG: %w", format, err)
+	}
+	return counter.n, nil
+}
+
+// pngMagic is the PNG signature.
+var pngMagic = []byte{0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a}
+
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // StatusRow is one line of `ps2hdd art status`.
