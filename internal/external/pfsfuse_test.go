@@ -170,12 +170,12 @@ func TestArchiveArgs(t *testing.T) {
 	if got := strings.Join(ListArgs("/x/a.7z"), " "); got != "l -slt /x/a.7z" {
 		t.Errorf("ListArgs = %q", got)
 	}
-	if got := strings.Join(StreamArgs("/x/a.7z", "a.iso"), " "); got != "e -so /x/a.7z a.iso" {
+	if got := strings.Join(StreamArgs("/x/a.7z", "a.iso"), " "); got != "e -so -spd /x/a.7z a.iso" {
 		t.Errorf("StreamArgs = %q", got)
 	}
 	// -y matters: without it 7z waits forever on an overwrite prompt that no
 	// stdin is attached to.
-	if got := strings.Join(ExtractArgs("/x/a.7z", "a.iso", "/scratch"), " "); got != "e -y -o/scratch /x/a.7z a.iso" {
+	if got := strings.Join(ExtractArgs("/x/a.7z", "a.iso", "/scratch"), " "); got != "e -y -spd -o/scratch /x/a.7z a.iso" {
 		t.Errorf("ExtractArgs = %q", got)
 	}
 }

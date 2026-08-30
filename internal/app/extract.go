@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/external"
@@ -32,6 +33,11 @@ func (s *Services) extractSource(ctx context.Context, g model.Game, opts Install
 			Tool:    external.SevenZipTool,
 			Feature: fmt.Sprintf("Installing %s, which is inside an archive", g.Title),
 		}
+	}
+
+	entries, err := a.List(ctx, g.SourcePath)
+	if err != nil {
+		return "", nil, fmt.Errorf("list %s: %w", filepath.Base(g.SourcePath), err)
 	}
 
 	root, err := s.ScratchRoot()
@@ -72,6 +78,17 @@ func (s *Services) extractSource(ctx context.Context, g model.Game, opts Install
 		return "", nil, fmt.Errorf("extract %s from %s: %w",
 			g.ArchiveMember, filepath.Base(g.SourcePath), err)
 	}
+
+	// A raw MODE2/2352 rip needs its cuesheet: hdl_dump cannot read the .bin
+	// alone. 7z's `e` flattens paths, so the cue lands beside the image and
+	// the FILE line it carries resolves.
+	if cue := cueMemberFor(entries, g.ArchiveMember); cue != "" {
+		if _, err := a.Extract(ctx, g.SourcePath, cue, dir); err != nil {
+			cleanup()
+			return "", nil, fmt.Errorf("extract %s from %s: %w",
+				cue, filepath.Base(g.SourcePath), err)
+		}
+	}
 	// 7z reports success without writing anything if the member name does not
 	// match, so the file is confirmed rather than assumed.
 	fi, err := os.Stat(path)
@@ -81,7 +98,50 @@ func (s *Services) extractSource(ctx context.Context, g model.Game, opts Install
 			filepath.Base(path), filepath.Base(g.SourcePath))
 	}
 	log.Info("extracted archived source", "path", path, "bytes", fi.Size())
-	return path, cleanup, nil
+	return HDLSourcePath(path), cleanup, nil
+}
+
+// cueMemberFor finds the cuesheet inside an archive that describes a member.
+//
+// A sheet named for the image is the match. Failing that, a lone cuesheet in
+// an archive holding one image describes that image -- rip sets vary in
+// whether the two names agree exactly. More than one, and nothing is assumed.
+func cueMemberFor(entries []external.ArchiveEntry, member string) string {
+	stem := strings.TrimSuffix(member, filepath.Ext(member))
+	var cues []string
+	for _, e := range entries {
+		if !strings.EqualFold(filepath.Ext(e.Name), ".cue") {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSuffix(e.Name, filepath.Ext(e.Name)), stem) {
+			return e.Name
+		}
+		cues = append(cues, e.Name)
+	}
+	if len(cues) == 1 {
+		return cues[0]
+	}
+	return ""
+}
+
+// HDLSourcePath returns the path hdl_dump should be given for a disc image.
+//
+// hdl_dump cannot read a raw MODE2/2352 .bin on its own; its input layer
+// answers "Input or output is unsupported". It reads the CDRWIN cuesheet that
+// names the .bin perfectly well, and that sheet is what carries the sector
+// layout. So when a cuesheet sits beside a .bin, that is the path to hand
+// over. Anything else is passed through untouched.
+func HDLSourcePath(image string) string {
+	if !strings.EqualFold(filepath.Ext(image), ".bin") {
+		return image
+	}
+	stem := strings.TrimSuffix(image, filepath.Ext(image))
+	for _, ext := range []string{".cue", ".CUE"} {
+		if fi, err := os.Stat(stem + ext); err == nil && fi.Mode().IsRegular() {
+			return stem + ext
+		}
+	}
+	return image
 }
 
 // ScratchRoot is where archived images are unpacked.

@@ -146,8 +146,13 @@ func ParseSevenZipList(out string) []ArchiveEntry {
 }
 
 // StreamArgs builds the argument vector that writes one member to stdout.
+//
+// -spd disables wildcard matching, so the member name is taken literally. The
+// name came from 7z's own listing, so it needs no interpretation, and a rip
+// named "Game [SLUS-20712].iso" should never depend on how a pattern matcher
+// reads its brackets.
 func StreamArgs(archive, inner string) []string {
-	return []string{"e", "-so", archive, inner}
+	return []string{"e", "-so", "-spd", archive, inner}
 }
 
 // Stream hands fn a reader over one file inside the archive.
@@ -163,10 +168,13 @@ func (a Archive) Stream(ctx context.Context, archive, inner string, fn func(io.R
 }
 
 // ExtractArgs builds the argument vector that extracts one member into a
-// directory. -y answers the overwrite prompt, which would otherwise wait
-// forever on a stdin nothing is attached to.
+// directory.
+//
+// -y answers the overwrite prompt, which would otherwise wait forever on a
+// stdin nothing is attached to. -spd takes the member name literally; see
+// StreamArgs.
 func ExtractArgs(archive, inner, destDir string) []string {
-	return []string{"e", "-y", "-o" + destDir, archive, inner}
+	return []string{"e", "-y", "-spd", "-o" + destDir, archive, inner}
 }
 
 // Extract writes one file from the archive into destDir and returns its path.

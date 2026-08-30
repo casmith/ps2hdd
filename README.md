@@ -267,6 +267,13 @@ read. The fallback is the boot ELF in the root directory, which every PS2 disc
 names after its serial (`SLUS_202.16;1`). That fallback applies only to a
 partial read: given the whole image, ps2hdd has no excuse to guess.
 
+A CD-based title ripped raw comes out with its cuesheet. `hdl_dump` cannot read
+a bare MODE2/2352 `.bin` — its input layer answers `Input or output is
+unsupported` — but it reads the CDRWIN sheet naming that `.bin` perfectly well,
+because the sheet is what records the sector layout. So the sheet is extracted
+alongside and is what gets handed over. The same applies to a loose `.bin` with
+a `.cue` beside it.
+
 Installing does unpack, because `hdl_dump` seeks around the image and cannot be
 fed a stream. The copy goes to `install.scratch_dir` (default
 `~/.cache/ps2hdd/scratch`, deliberately not `/tmp`, which is often tmpfs), is

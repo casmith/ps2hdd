@@ -251,6 +251,13 @@ hdl_dump seeks around the image it injects and cannot read a pipe.
 to ISO, is a plain 2048-byte stream; a CD-based title ripped raw is MODE2/2352,
 with sync and header bytes around each block. Both are tried, 2048 first.
 
+**A raw BIN is installed through its cuesheet.** hdl_dump's input layer cannot
+read a bare MODE2/2352 `.bin` and reports `Input or output is unsupported`; the
+CDRWIN cuesheet that names the `.bin` carries the sector layout and is read
+without complaint. ps2hdd hands over the sheet whenever one exists, extracting
+it from the archive alongside the image or finding it beside a loose one. All
+54 raw rips in one 513-archive library ship a sheet.
+
 **POPS.ELF and IOPRP252.IMG are Sony code.** ps2hdd does not ship them, cannot
 ship them, and will not. It detects their absence, explains it, and imports
 copies the user supplies with `ps2hdd setup ps1 --import <dir>`. Only files
