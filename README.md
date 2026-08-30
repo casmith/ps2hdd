@@ -8,21 +8,7 @@ fill in the artwork Open PS2 Loader shows on the console. No Windows, no Wine,
 no OPL Manager, no WinHIIP, and no staging directory full of games you already
 have somewhere else.
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ ps2hdd                                     WDC WD1200JB   95.6 GiB free  READY│
-│ 1 PS2 Games      Installed  filter: all                                      │
-│ 2 PS1 Games                                                                  │
-│ 3 Installed        SYS GAME                          ID            SIZE ARTWORK│
-│ 4 Assets (2)     ○ PS1 Castlevania: SOTN            SLUS_000.67 550 MiB complete│
-│ 5 Queue          ● PS2 Burnout 3: Takedown          SLUS_210.50   3.4 GiB complete│
-│ 6 Drive          ○ PS2 God of War                   SCUS_973.99   7.8 GiB 2 missing│
-│ 7 Settings       ○ PS1 Metal Gear Solid             SLUS_005.94   1.3 GiB 1 missing│
-│                                                                              │
-│                  Selected: 1   4 installed   2 missing artwork               │
-│ ↑↓ move · space select · d remove · a artwork · f filter · tab view · q quit │
-└─────────────────────────────────────────────────────────────────────────────┘
-```
+![The installed library, with artwork status per title](docs/screenshots/installed.png)
 
 ## What it manages
 
@@ -32,6 +18,45 @@ A PlayStation 2 internal hard drive as FreeHDBoot leaves it:
 - PS2 games as **HDLoader** partitions
 - PS1 games as **POPS** virtual CDs in `__.POPS`, launched by **POPStarter**
 - artwork and per-game settings in **`+OPL`**, read by **Open PS2 Loader**
+
+## Screens
+
+Seven views, one keystroke apart. `tab` cycles them; the digits jump straight to
+one.
+
+**Browse a source directory and pick what you want.** Selection is multi-select
+and the estimate is computed from the images themselves, so it is what will
+actually land on the disk. Titles already installed stay visible and dimmed
+rather than disappearing.
+
+![The PS2 source browser with three titles selected and a 6.0 GiB estimate](docs/screenshots/ps2-source.png)
+
+**Then watch the queue run.** A failure stops that title, not the run.
+
+![The install queue, one game copying at 55% and four waiting](docs/screenshots/queue.png)
+
+**Artwork, per slot, per game.** Front covers, back covers, disc images and
+logos, fetched at the exact dimensions OPL expects. A slot the configured
+provider cannot supply is reported separately from one that is merely missing,
+because no amount of syncing will fill it.
+
+![Artwork status showing COV, COV2, ICO and LGO complete for thirty games](docs/screenshots/artwork.png)
+
+**The drive, as it actually is.** Partition layout, space and PS1 readiness,
+read natively from the APA table with no external tools involved.
+
+![Drive view showing APA layout, storage and PS1 readiness](docs/screenshots/drive.png)
+
+**PS1 rips are grouped into titles**, so a three-disc release is one entry
+rather than three. Source directories are browsing locations, never a record of
+what is installed — only the HDD decides that.
+
+![PS1 source browser showing multi-disc grouping](docs/screenshots/ps1-source.png)
+
+**Every setting is editable in place**, written back to the same TOML file the
+CLI reads.
+
+![Settings view](docs/screenshots/settings.png)
 
 ## Try it without a PS2 HDD
 
