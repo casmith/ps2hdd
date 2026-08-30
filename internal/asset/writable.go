@@ -20,7 +20,13 @@ import (
 // exactly as it was found.
 func CheckWritable(mountpoint string) error {
 	probe := filepath.Join(mountpoint, ".ps2hdd-write-probe")
-	f, err := os.OpenFile(probe, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o644)
+	// Never O_TRUNC: pfsfuse has no truncate, so a probe left behind by an
+	// interrupted run would make this report the mount as unwritable when it
+	// is not. See the note in Manager.install.
+	if err := os.Remove(probe); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return writeProbeError(mountpoint, err)
+	}
+	f, err := os.OpenFile(probe, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {
 		return writeProbeError(mountpoint, err)
 	}
