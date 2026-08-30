@@ -274,7 +274,10 @@ func ParseMSF(s string) (MSF, error) {
 // into an image that would not boot.
 func (c Cue) Validate() error {
 	if c.FileCount > 1 {
-		return fmt.Errorf("%w: %s references %d files; POPS needs the whole disc in a single BIN. Re-rip or join the tracks first",
+		// A split dump is a fixable problem, not a dead end, so the message
+		// names the tool that fixes it. BinMerger exists specifically to join
+		// a multi-BIN cuesheet for POPStarter VCD creation.
+		return fmt.Errorf("%w: %s references %d files; POPS needs the whole disc in a single BIN. Join the tracks first with BinMerger (github.com/israpps/BinMerger), or re-rip the disc as a single BIN",
 			ErrBadCue, filepath.Base(c.Path), c.FileCount)
 	}
 	if c.FileType != "" && c.FileType != "BINARY" {

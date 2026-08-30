@@ -257,7 +257,8 @@ discs in game.
 
 The rip must be `MODE2/2352` in a single BIN. Split dumps and 2048-byte MODE1
 images are refused with an explanation rather than converted into something
-that would not boot.
+that would not boot. A split dump is fixable: [BinMerger](https://github.com/israpps/BinMerger)
+joins a multi-BIN cuesheet into one, which is what the error message points at.
 
 ## Raw disk safety
 
