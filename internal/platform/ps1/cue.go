@@ -40,6 +40,10 @@ func bcd(v int) byte {
 // Track is one track of a cuesheet.
 type Track struct {
 	Number int
+	// FileIndex is which FILE statement this track appeared under, counting
+	// from zero. Always 0 in a single-file sheet; in a split dump it is what
+	// turns a per-file INDEX into an absolute one.
+	FileIndex int
 	// Mode is the raw cuesheet mode, e.g. "MODE2/2352" or "AUDIO".
 	Mode string
 	// Index0 is the pregap position, if the sheet declares one.
@@ -68,10 +72,18 @@ type Cue struct {
 	// FileType is the FILE type token, normally BINARY.
 	FileType string
 	Tracks   []Track
-	// FileCount is how many FILE statements the sheet had. More than one means
-	// a split dump, which POPS cannot represent.
+	// FileCount is how many FILE statements the sheet had. More than one is a
+	// split dump: POPS needs a single stream, so Convert joins them.
 	FileCount int
+	// Files are every FILE name in the order the sheet lists them, and
+	// FilePaths the same resolved against the sheet's directory. A single-file
+	// sheet has one of each, matching BinName and BinPath.
+	Files     []string
+	FilePaths []string
 }
+
+// Split reports whether the rip is spread across more than one data file.
+func (c Cue) Split() bool { return c.FileCount > 1 }
 
 // AudioTracks reports how many tracks hold CD-DA.
 func (c Cue) AudioTracks() int {
@@ -118,8 +130,12 @@ func ParseCueFile(path string) (Cue, error) {
 		return c, fmt.Errorf("%s: %w", filepath.Base(path), err)
 	}
 	c.Path = path
+	dir := filepath.Dir(path)
+	for _, n := range c.Files {
+		c.FilePaths = append(c.FilePaths, filepath.Join(dir, n))
+	}
 	if c.BinName != "" {
-		c.BinPath = filepath.Join(filepath.Dir(path), c.BinName)
+		c.BinPath = filepath.Join(dir, c.BinName)
 	}
 	return c, nil
 }
@@ -151,6 +167,7 @@ func ParseCue(r interface{ Read([]byte) (int, error) }) (Cue, error) {
 				return c, fmt.Errorf("%w: line %d: FILE has no filename", ErrBadCue, lineNo)
 			}
 			c.FileCount++
+			c.Files = append(c.Files, fields[1])
 			if c.FileCount == 1 {
 				c.BinName = fields[1]
 				if len(fields) >= 3 {
@@ -165,7 +182,11 @@ func ParseCue(r interface{ Read([]byte) (int, error) }) (Cue, error) {
 			if err != nil {
 				return c, fmt.Errorf("%w: line %d: track number %q", ErrBadCue, lineNo, fields[1])
 			}
-			c.Tracks = append(c.Tracks, Track{Number: n, Mode: strings.ToUpper(fields[2])})
+			c.Tracks = append(c.Tracks, Track{
+				Number:    n,
+				Mode:      strings.ToUpper(fields[2]),
+				FileIndex: maxInt(c.FileCount-1, 0),
+			})
 		case "INDEX":
 			if len(c.Tracks) == 0 {
 				return c, fmt.Errorf("%w: line %d: INDEX before any TRACK", ErrBadCue, lineNo)
@@ -273,13 +294,6 @@ func ParseMSF(s string) (MSF, error) {
 // 2048-byte MODE1 dumps are rejected with an explanation rather than converted
 // into an image that would not boot.
 func (c Cue) Validate() error {
-	if c.FileCount > 1 {
-		// A split dump is a fixable problem, not a dead end, so the message
-		// names the tool that fixes it. BinMerger exists specifically to join
-		// a multi-BIN cuesheet for POPStarter VCD creation.
-		return fmt.Errorf("%w: %s references %d files; POPS needs the whole disc in a single BIN. Join the tracks first with BinMerger (github.com/israpps/BinMerger), or re-rip the disc as a single BIN",
-			ErrBadCue, filepath.Base(c.Path), c.FileCount)
-	}
 	if c.FileType != "" && c.FileType != "BINARY" {
 		return fmt.Errorf("%w: FILE type is %s; POPS needs a BINARY image", ErrBadCue, c.FileType)
 	}
@@ -314,4 +328,74 @@ func (c Cue) Validate() error {
 // by inserting the pregap into the image, and so does the built-in converter.
 func (c Cue) LooksLikeCDRWIN() bool {
 	return c.PregapCount() == 1 && c.PostgapCount() == 0
+}
+
+// maxInt is the pre-generics helper this file needs in exactly one place.
+func maxInt(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// MSFFromLBA is the inverse of MSF.LBA.
+func MSFFromLBA(lba int) MSF {
+	if lba < 0 {
+		lba = 0
+	}
+	m := lba / (60 * 75)
+	rem := lba % (60 * 75)
+	return MSF{M: m, S: rem / 75, F: rem % 75}
+}
+
+// Joined rewrites a split cuesheet as the single-file sheet it would be if its
+// tracks were concatenated, given each file's size in bytes.
+//
+// A split rip stores every track in its own file with its own timecodes, and
+// the two-second pregap before an audio track is real data inside that track's
+// file -- Redump sheets say so explicitly with INDEX 00 00:00:00 followed by
+// INDEX 01 00:02:00. Joining is therefore plain concatenation, and each
+// track's absolute position is the running sector count of the files before it
+// plus whatever its own sheet said.
+//
+// The sizes must be whole sectors. A track that is not is a truncated rip, and
+// joining it would silently shift every track after it.
+func (c Cue) Joined(sizes []int64) (Cue, error) {
+	if len(sizes) != c.FileCount {
+		return c, fmt.Errorf("%w: %s has %d files but %d sizes were given",
+			ErrBadCue, filepath.Base(c.Path), c.FileCount, len(sizes))
+	}
+	starts := make([]int, len(sizes))
+	running := 0
+	for i, sz := range sizes {
+		if sz%SectorSize != 0 {
+			name := ""
+			if i < len(c.Files) {
+				name = c.Files[i]
+			}
+			return c, fmt.Errorf("%w: %s is %d bytes, not a whole number of %d-byte sectors; the rip is truncated",
+				ErrBadCue, name, sz, SectorSize)
+		}
+		starts[i] = running
+		running += int(sz / SectorSize)
+	}
+
+	out := c
+	out.FileCount = 1
+	out.Files = []string{c.BinName}
+	out.FilePaths = nil
+	out.Tracks = make([]Track, len(c.Tracks))
+	for i, t := range c.Tracks {
+		base := 0
+		if t.FileIndex < len(starts) {
+			base = starts[t.FileIndex]
+		}
+		t.Index1 = MSFFromLBA(base + t.Index1.LBA())
+		if t.HasIndex0 {
+			t.Index0 = MSFFromLBA(base + t.Index0.LBA())
+		}
+		t.FileIndex = 0
+		out.Tracks[i] = t
+	}
+	return out, nil
 }
