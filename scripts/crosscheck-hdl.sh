@@ -44,15 +44,24 @@ echo "ps2hdd:   $PS2HDD"
 echo "hdl_dump: $HDL"
 echo
 
-ref=$("$HDL" hdl_toc "$DEV" --csv 2>/dev/null)
+# Neither tool's stderr is discarded. A read that fails explains itself there,
+# and silently comparing against the empty list it leaves behind would report a
+# refusal or a crash as "0 games" -- which reads as an empty disk.
+errlog=$(mktemp) || exit 2
+trap 'rm -f "$errlog"' EXIT
+
+ref=$("$HDL" hdl_toc "$DEV" --csv 2>"$errlog")
 if [ -z "$ref" ]; then
   echo "hdl_dump produced no output -- is $DEV really a PS2 HDD?" >&2
+  sed 's/^/  /' "$errlog" >&2
   exit 1
 fi
 
-mine=$("$PS2HDD" --no-color --json --device "$DEV" list --ps2 --installed --no-artwork 2>/dev/null)
-if [ -z "$mine" ]; then
-  echo "ps2hdd produced no output for $DEV" >&2
+mine=$("$PS2HDD" --no-color --json --device "$DEV" list --ps2 --installed --no-artwork 2>"$errlog")
+status=$?
+if [ "$status" -ne 0 ] || [ -z "$mine" ]; then
+  echo "ps2hdd could not read $DEV (exit $status):" >&2
+  sed 's/^/  /' "$errlog" >&2
   exit 1
 fi
 
@@ -72,8 +81,15 @@ for line in os.environ["REF"].splitlines():
         "name":  ";".join(f[5:]).strip(),
     }
 
+doc = json.loads(os.environ["MINE"])
+
+# A warning means part of the library could not be read. The entries that did
+# come back are still real, but they are no longer the whole list, so a
+# comparison against them cannot establish agreement either way.
+warnings = doc.get("warnings") or []
+
 mine = {}
-for e in json.loads(os.environ["MINE"]).get("entries") or []:
+for e in doc.get("entries") or []:
     mine[re.sub(r"[^A-Z0-9]", "", e["game_id"].upper())] = {
         "media": (e.get("media") or "").upper(),
         # ps2hdd reports the allocated footprint; hdl_toc reports the image
@@ -83,6 +99,13 @@ for e in json.loads(os.environ["MINE"]).get("entries") or []:
     }
 
 fail = 0
+incomplete = bool(warnings)
+if incomplete:
+    print(f"ps2hdd reported {len(warnings)} warning(s):")
+    for w in warnings:
+        print(f"  {w}")
+    print()
+
 print(f"hdl_dump sees {len(ref)} game(s); ps2hdd sees {len(mine)}")
 if set(ref) != set(mine):
     fail = 1
@@ -106,6 +129,10 @@ for k in sorted(set(ref) & set(mine)):
         print(f"  agree    {k}  {r['media']:<3}  {r['name']}")
 
 print()
+if incomplete:
+    print("INCOMPLETE -- ps2hdd read only part of the library, so this comparison")
+    print("proves nothing. Fix the warning above and re-run. Do not write to this disk.")
+    sys.exit(1)
 if fail:
     print("MISMATCH -- the native reader disagrees with hdl_dump. Do not write to this disk.")
     sys.exit(1)
