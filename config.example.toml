@@ -95,8 +95,10 @@ provider = "opl-art"
 #   config       the per-game OPL settings file. No database can generate one,
 #                so leave it off unless you keep a local mirror of your own.
 #
-# Whatever the source serves is re-encoded to PNG on the way in, because OPL
-# picks its decoder from the filename and these are always written as .png.
+# Whatever the source serves is re-encoded to PNG and scaled to the sizes above
+# on the way in: OPL picks its decoder from the filename, and its slots have
+# exact dimensions that a source ignoring them renders badly or not at all. Art
+# that already matches is copied through untouched.
 covers      = true
 back_covers = true
 discs       = true

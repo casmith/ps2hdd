@@ -414,13 +414,24 @@ work unchanged -- or add `[assets.templates]` entries for another database. A
 mirror is chained ahead of the remote provider automatically, and a chain can
 fill a slot if any member can.
 
-### Everything is written as PNG
+### Everything is written as PNG, at OPL's size
 
-Art files are named `<serial>_<TYPE>.png` and OPL picks its decoder from that
-extension, so bytes from a provider serving JPEG are re-encoded on the way in
-rather than copied into a name they do not match. Anything that cannot be
-decoded as an image is refused rather than written: a file the console cannot
-draw is worse than an absent one, because it looks installed.
+Two things have to be true of the file that lands on the HDD, and neither is
+true of everything a provider serves.
+
+It has to be a PNG. Art files are named `<serial>_<TYPE>.png` and OPL picks its
+decoder from that extension, so bytes from a provider serving JPEG are
+re-encoded rather than copied into a name they do not match. Anything that
+cannot be decoded as an image is refused rather than written: a file the
+console cannot draw is worse than an absent one, because it looks installed.
+
+It has to be the documented size. OPL's slots have exact dimensions -- 140x200
+for a PS2 front cover, 64x64 for the disc -- and a source that ignores them
+gives art that renders inconsistently or not at all. The xlenore covers are
+512x736, thirteen times the pixels of the slot they go into, on a console with
+32 MB of RAM. Whatever the source gives is scaled to the slot; a PNG already at
+the right size is copied through untouched, so a database built for OPL stays
+byte-identical to what it published.
 
 Templates understand `{serial}` (dashed), `{serial_opl}`, `{serial_plain}`,
 `{type}` and `{platform}`.

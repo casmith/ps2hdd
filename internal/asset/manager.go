@@ -14,6 +14,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"golang.org/x/image/draw"
+
 	"github.com/casmith/ps2hdd/internal/asset/provider"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
@@ -235,7 +237,7 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	n, err := copyAsPNG(out, in, item.Type)
+	n, err := writeForOPL(out, in, item.Game.Platform, item.Type)
 	if cerr := out.Close(); err == nil {
 		err = cerr
 	}
@@ -246,16 +248,26 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 	return n, nil
 }
 
-// copyAsPNG writes the asset to out, re-encoding it if it is not already PNG.
+// writeForOPL writes the asset to out as a PNG at the size OPL expects.
 //
-// Art files are named <serial>_COV.png and OPL picks its decoder from that
-// extension, so a JPEG copied byte-for-byte into that name is a file the
-// console cannot draw. Some databases serve JPEG -- the xlenore collections
-// PCSX2 uses are all JPEG -- so the bytes have to be converted rather than
-// trusted to match the name they are being given.
+// Two things have to be true of the file that lands on the HDD, and neither is
+// true of everything a provider serves.
+//
+// It has to be a PNG. Art files are named <serial>_COV.png and OPL picks its
+// decoder from that extension, so a JPEG copied byte-for-byte into that name
+// is a file the console cannot draw. The xlenore collections PCSX2 uses are
+// all JPEG.
+//
+// It has to be the documented size. OPL's art slots have exact dimensions --
+// 140x200 for a PS2 front cover, 64x64 for the disc -- and a source that
+// ignores them produces art that renders inconsistently or not at all: the
+// xlenore covers are 512x736, which is thirteen times the pixels of the slot
+// they are being written into, on a console with 32 MB of RAM. Whatever the
+// source gives is scaled to the slot. model.Dimensions is the authority, and
+// a slot it does not pin is written through at its natural size.
 //
 // CFG entries are text and are copied untouched.
-func copyAsPNG(out io.Writer, in io.Reader, t model.AssetType) (int64, error) {
+func writeForOPL(out io.Writer, in io.Reader, platform model.Platform, t model.AssetType) (int64, error) {
 	if t == model.AssetConfig {
 		return io.Copy(out, in)
 	}
@@ -266,14 +278,40 @@ func copyAsPNG(out io.Writer, in io.Reader, t model.AssetType) (int64, error) {
 		return 0, err
 	}
 	body := io.MultiReader(bytes.NewReader(head[:nRead]), in)
+	isPNG := nRead == len(pngMagic) && bytes.Equal(head, pngMagic)
 
-	if nRead == len(pngMagic) && bytes.Equal(head, pngMagic) {
+	want, pinned := model.Dimensions(platform, t)
+
+	// A PNG already at the right size is copied through untouched, which keeps
+	// a database built for OPL byte-identical to what it published.
+	if isPNG && !pinned {
 		return io.Copy(out, body)
+	}
+	if isPNG {
+		buf, err := io.ReadAll(body)
+		if err != nil {
+			return 0, err
+		}
+		if cfg, err := png.DecodeConfig(bytes.NewReader(buf)); err == nil &&
+			cfg.Width == want.Width && cfg.Height == want.Height {
+			return io.Copy(out, bytes.NewReader(buf))
+		}
+		body = bytes.NewReader(buf)
 	}
 
 	img, format, err := image.Decode(body)
 	if err != nil {
 		return 0, fmt.Errorf("the artwork is neither PNG nor a format that could be decoded: %w", err)
+	}
+	if pinned {
+		b := img.Bounds()
+		if b.Dx() != want.Width || b.Dy() != want.Height {
+			scaled := image.NewRGBA(image.Rect(0, 0, want.Width, want.Height))
+			// CatmullRom because most of this work is downscaling a cover by a
+			// large factor, where a cheaper kernel loses the cover text.
+			draw.CatmullRom.Scale(scaled, scaled.Bounds(), img, b, draw.Over, nil)
+			img = scaled
+		}
 	}
 	counter := &countingWriter{w: out}
 	if err := png.Encode(counter, img); err != nil {
