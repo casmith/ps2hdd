@@ -723,3 +723,150 @@ func TestCreatePOPSPartitionDryRunTouchesNothing(t *testing.T) {
 		t.Errorf("a dry run ran pfsshell %d time(s)", len(calls))
 	}
 }
+
+// hdlTocCSV renders rows in the format `hdl_dump hdl_toc --csv` emits, header
+// line and all, so the comparison is driven by the real shape of the output.
+func hdlTocCSV(rows ...string) string {
+	out := "type      size flags       dma startup      name\n"
+	for _, r := range rows {
+		out += r + "\n"
+	}
+	return out + "total 114432MB, used 8320MB, available 106112MB\n"
+}
+
+// The three games on the synthetic drive, as hdl_dump would report them.
+var demoTocRows = []string{
+	"DVD;3538944KB;  0        ;*u4;SLUS_210.50;Burnout 3 Takedown",
+	"DVD;3014656KB;  0        ;*u4;SLUS_215.03;God Hand",
+	"CD;655360KB;  0        ;*u4;SLUS_200.02;Ridge Racer V",
+}
+
+// newCrossCheckServices wires a synthetic APA image to a bare FakeRunner.
+//
+// The demo environment cannot be used here: its runner installs a Handler,
+// which FakeRunner consults ahead of any canned Responses, so hdl_dump's
+// output could not be controlled per test.
+func newCrossCheckServices(t *testing.T) (*app.Services, *external.FakeRunner) {
+	t.Helper()
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	img := filepath.Join(root, "ps2.img")
+	if err := apasynth.Write(img, apasynth.DefaultDisk()); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
+	cfg.Device = img
+
+	runner := external.NewFakeRunner()
+	svc := app.New(cfg, runner)
+	t.Cleanup(func() { _ = svc.Close(context.Background()) })
+	return svc, runner
+}
+
+func TestCrossCheckAgrees(t *testing.T) {
+	svc, runner := newCrossCheckServices(t)
+	runner.Responses[external.HDLDumpTool] = []external.Result{{Stdout: hdlTocCSV(demoTocRows...)}}
+
+	cc, err := svc.CrossCheckReader(context.Background())
+	if err != nil {
+		t.Fatalf("CrossCheckReader: %v", err)
+	}
+	if !cc.Agree() {
+		t.Fatalf("readers disagree: %v (native=%d ref=%d)", cc.Disagreements, cc.NativeGames, cc.ReferenceGames)
+	}
+	if cc.NativeGames != 3 || cc.ReferenceGames != 3 {
+		t.Errorf("counts: native=%d reference=%d, want 3 and 3", cc.NativeGames, cc.ReferenceGames)
+	}
+}
+
+func TestCrossCheckReportsEveryKindOfDisagreement(t *testing.T) {
+	cases := map[string]struct {
+		rows []string
+		want string
+	}{
+		"missing from ps2hdd": {
+			rows: append(append([]string{}, demoTocRows...),
+				"DVD;1048576KB;  0        ;*u4;SLUS_209.46;Shadow of the Colossus"),
+			want: "missing from ps2hdd's",
+		},
+		"missing from hdl_dump": {
+			rows: demoTocRows[:2],
+			want: "missing from hdl_dump's",
+		},
+		"title differs": {
+			rows: []string{
+				"DVD;3538944KB;  0        ;*u4;SLUS_210.50;Burnout 3",
+				demoTocRows[1], demoTocRows[2],
+			},
+			want: "reads the title as",
+		},
+		"media differs": {
+			rows: []string{
+				demoTocRows[0], demoTocRows[1],
+				"DVD;655360KB;  0        ;*u4;SLUS_200.02;Ridge Racer V",
+			},
+			want: "reads the media as CD, hdl_dump as DVD",
+		},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			svc, runner := newCrossCheckServices(t)
+			runner.Responses[external.HDLDumpTool] = []external.Result{{Stdout: hdlTocCSV(tc.rows...)}}
+
+			cc, err := svc.CrossCheckReader(context.Background())
+			if err != nil {
+				t.Fatalf("CrossCheckReader: %v", err)
+			}
+			if cc.Agree() {
+				t.Fatal("a disagreement was reported as agreement")
+			}
+			if !strings.Contains(strings.Join(cc.Disagreements, "\n"), tc.want) {
+				t.Errorf("disagreements do not mention %q:\n%s", tc.want, strings.Join(cc.Disagreements, "\n"))
+			}
+		})
+	}
+}
+
+// Without hdl_dump the comparison cannot run. That is not a fault in the
+// library and must not be reported as agreement either.
+func TestCrossCheckWithoutHDLDumpIsNotAgreement(t *testing.T) {
+	svc, runner := newCrossCheckServices(t)
+	runner.Missing[external.HDLDumpTool] = true
+
+	cc, err := svc.CrossCheckReader(context.Background())
+	if err != nil {
+		t.Fatalf("CrossCheckReader: %v", err)
+	}
+	if cc.Ran {
+		t.Error("Ran is true with no hdl_dump installed")
+	}
+	if cc.Agree() {
+		t.Error("an unrun cross-check reported agreement")
+	}
+	if cc.Unavailable == "" {
+		t.Error("no reason given for the check not running")
+	}
+}
+
+// hdl_toc needs raw block access, so an unprivileged run fails while the
+// native read succeeds. The library is fine; the comparison is unavailable.
+func TestCrossCheckSurvivesAnHDLDumpFailure(t *testing.T) {
+	svc, runner := newCrossCheckServices(t)
+	runner.Errors[external.HDLDumpTool] = []error{errors.New("Permission denied")}
+
+	cc, err := svc.CrossCheckReader(context.Background())
+	if err != nil {
+		t.Fatalf("CrossCheckReader returned a hard error: %v", err)
+	}
+	if cc.Ran || cc.Agree() {
+		t.Error("a failed hdl_dump run was treated as a completed comparison")
+	}
+	if !strings.Contains(cc.Unavailable, "Permission denied") {
+		t.Errorf("reason does not quote hdl_dump: %q", cc.Unavailable)
+	}
+}

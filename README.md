@@ -347,15 +347,26 @@ Hardware tests are separate and read-only:
 PS2HDD_TEST_DEVICE=/dev/disk/by-id/ata-YOUR_DRIVE go test -tags=hardware ./internal/drive/
 ```
 
-The native APA reader can also be checked against `hdl_dump`, which is the
-single most valuable verification in the project — everything else stands on
-that read path:
+The native APA reader is also checked against `hdl_dump`, which is the single
+most valuable verification in the project — everything else stands on that read
+path. `ps2hdd doctor` does it on every run, whenever `hdl_dump` is installed and
+can read the drive:
 
 ```sh
-sudo scripts/crosscheck-hdl.sh /dev/disk/by-id/ata-YOUR_DRIVE
+sudo ps2hdd doctor        # see the "Reader cross-check" block
 ```
 
-It works against a disk image too, via a loop device; the script explains how.
+A disagreement is reported as a problem and doctor exits non-zero. `not checked`
+means the comparison could not run — usually no `hdl_dump`, or no root — and
+must not be read as a pass.
+
+For a per-game report, a drive you have not configured, or a disk image behind a
+loop device:
+
+```sh
+sudo scripts/crosscheck-hdl.sh              # the configured drive
+sudo scripts/crosscheck-hdl.sh /dev/loop1   # an image; the script explains how
+```
 
 **No test in this repository writes to a block device.** Write coverage is the
 manual checklist in `docs/hardware-validation.md`.

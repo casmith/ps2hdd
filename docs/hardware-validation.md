@@ -39,17 +39,23 @@ No writes at all. Safe on any drive.
 | 1.6 | `ps2hdd list --ps1` | Every PS1 game appears; multi-disc titles appear once with the right disc count. |
 | 1.7 | `ps2hdd mount +OPL` | The mountpoint contains `ART/`, `CFG/` and the rest. |
 | 1.8 | `ps2hdd art status` | Matches what is actually in `+OPL/ART`. |
-| 1.9 | `ps2hdd doctor` | No surprises. |
+| 1.9 | `ps2hdd doctor` | No surprises, and **Reader cross-check** reports `Agreement OK` rather than `not checked`. |
 | 1.10 | Sizes | The size of a known game matches `hdl_dump hdl_toc`. |
 
 **If 1.5 disagrees with `hdl_dump hdl_toc`, stop.** The native APA reader and
 the reference implementation must agree; a disagreement means the parser is
 wrong and no write should follow.
 
-`scripts/crosscheck-hdl.sh` does this comparison for you and reports per-game
-agreement:
+`ps2hdd doctor` runs this comparison natively whenever `hdl_dump` is installed
+and can read the drive, and reports a disagreement as a problem. Check the
+**Reader cross-check** block: `not checked` is not a pass.
+
+`scripts/crosscheck-hdl.sh` does the same comparison per game, and covers what
+doctor cannot: a drive you have not configured, or a disk image behind a loop
+device. With no argument it uses the configured drive.
 
 ```sh
+sudo scripts/crosscheck-hdl.sh                              # the configured drive
 sudo scripts/crosscheck-hdl.sh /dev/disk/by-id/ata-YOUR_DRIVE
 ```
 
