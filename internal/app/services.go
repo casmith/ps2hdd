@@ -244,14 +244,14 @@ func (s *Services) sourceCache(name string) *catalog.Cache {
 // ScanSources scans both configured source directories.
 func (s *Services) ScanSources(ctx context.Context) (ps2Res, ps1Res catalog.ScanResult, err error) {
 	if dir := s.Config.Sources.PS2; dir != "" {
-		sc := catalog.NewScanner(s.sourceCache("ps2"))
+		sc := catalog.NewScanner(s.sourceCache("ps2"), s.Runner)
 		ps2Res, err = sc.ScanPS2(ctx, dir)
 		if err != nil {
 			return ps2Res, ps1Res, fmt.Errorf("scan PS2 sources: %w", err)
 		}
 	}
 	if dir := s.Config.Sources.PS1; dir != "" {
-		sc := catalog.NewScanner(s.sourceCache("ps1"))
+		sc := catalog.NewScanner(s.sourceCache("ps1"), s.Runner)
 		ps1Res, err = sc.ScanPS1(ctx, dir)
 		if err != nil {
 			return ps2Res, ps1Res, fmt.Errorf("scan PS1 sources: %w", err)
@@ -443,13 +443,23 @@ func (s *Services) Tools() []ToolStatus {
 		{external.FusermountTool, "unmounting PFS partitions", false},
 		{external.PFSShellTool, "cross-checking the partition list", false},
 	}
-	out := make([]ToolStatus, 0, len(defs))
+	out := make([]ToolStatus, 0, len(defs)+1)
 	for _, d := range defs {
 		path, ok := external.Available(s.Runner, d.name)
 		out = append(out, ToolStatus{
 			Name: d.name, Path: path, Present: ok, Required: d.required, Purpose: d.purpose,
 		})
 	}
+	// 7z resolves to either of two executables, so it cannot be looked up by a
+	// single name like the others.
+	a := external.Archive{Runner: s.Runner}
+	path, ok := a.Available()
+	out = append(out, ToolStatus{
+		Name:    external.SevenZipTool,
+		Path:    path,
+		Present: ok,
+		Purpose: "reading and installing games held in .7z, .zip or .rar archives",
+	})
 	return out
 }
 

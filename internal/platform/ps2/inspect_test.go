@@ -1,6 +1,7 @@
 package ps2_test
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -211,5 +212,72 @@ func TestMediaTypeFallsBackToSize(t *testing.T) {
 		if !img.MediaFromSize {
 			t.Errorf("%s: MediaFromSize not set for an inconclusive signature", tc.name)
 		}
+	}
+}
+
+// A CD-based PS2 title ripped raw is MODE2/2352, not a 2048 stream. Only 2048
+// used to be tried, which made every such rip unidentifiable.
+func TestInspectReadsRaw2352Images(t *testing.T) {
+	data, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: "RAW_CD_GAME",
+		CDXA:     true,
+		Files: map[string][]byte{
+			"SYSTEM.CNF":  isosynth.PS2SystemCNF("SLUS_200.35"),
+			"SLUS_200.35": []byte("ELF"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "Raw Game (USA).bin")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	img, err := ps2.Inspect(path)
+	if err != nil {
+		t.Fatalf("Inspect: %v", err)
+	}
+	if img.GameID != "SLUS_200.35" {
+		t.Errorf("GameID = %q", img.GameID)
+	}
+	if img.Media != model.MediaCD {
+		t.Errorf("Media = %q, want cd for a raw 2352 rip", img.Media)
+	}
+}
+
+// On a real library SYSTEM.CNF frequently sits gigabytes into the image, out
+// of reach of a partial read. The root directory always holds the boot ELF,
+// named for the serial, and that is the fallback.
+func TestInspectAtFallsBackToTheRootDirectory(t *testing.T) {
+	data, err := isosynth.Build(isosynth.Image{
+		VolumeID: "LATE_CNF",
+		Files: map[string][]byte{
+			"SYSTEM.CNF":  isosynth.PS2SystemCNF("SLUS_212.81"),
+			"SLUS_212.81": []byte("ELF"),
+		},
+		PadBlocks: 400,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Cut the image at the start of the file area: the volume descriptor and
+	// the root directory are present, no file content is. That is the shape
+	// of a bounded read whose SYSTEM.CNF lies further in.
+	head := data[:21*2048]
+
+	if _, err := ps2.InspectAt(bytes.NewReader(head), int64(len(data)), "Late (USA).iso", false); err == nil {
+		t.Error("a complete read was allowed to guess the serial from the directory")
+	}
+
+	img, err := ps2.InspectAt(bytes.NewReader(head), int64(len(data)), "Late (USA).iso", true)
+	if err != nil {
+		t.Fatalf("partial InspectAt: %v", err)
+	}
+	if img.GameID != "SLUS_212.81" {
+		t.Errorf("GameID = %q", img.GameID)
+	}
+	// The size must come from the volume descriptor, not from the fragment.
+	if img.SizeBytes != int64(len(data)) {
+		t.Errorf("SizeBytes = %d, want %d", img.SizeBytes, len(data))
 	}
 }

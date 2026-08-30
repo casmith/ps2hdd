@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/casmith/ps2hdd/internal/catalog"
+	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/iso9660/isosynth"
 	"github.com/casmith/ps2hdd/internal/logging"
 )
@@ -70,7 +71,7 @@ func TestScanPS2(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	s := catalog.NewScanner(catalog.NewMemoryCache())
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
 	res, err := s.ScanPS2(context.Background(), root)
 	if err != nil {
 		t.Fatalf("ScanPS2: %v", err)
@@ -103,7 +104,7 @@ func TestScanPS2UsesCache(t *testing.T) {
 	root := t.TempDir()
 	writePS2ISO(t, filepath.Join(root, "Game.iso"), "SLUS_200.02")
 	c := catalog.NewMemoryCache()
-	s := catalog.NewScanner(c)
+	s := catalog.NewScanner(c, external.NewFakeRunner())
 
 	first, err := s.ScanPS2(context.Background(), root)
 	if err != nil {
@@ -129,7 +130,7 @@ func TestScanPS2CacheInvalidatedByChange(t *testing.T) {
 	path := filepath.Join(root, "Game.iso")
 	writePS2ISO(t, path, "SLUS_200.02")
 	c := catalog.NewMemoryCache()
-	s := catalog.NewScanner(c)
+	s := catalog.NewScanner(c, external.NewFakeRunner())
 	if _, err := s.ScanPS2(context.Background(), root); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +157,7 @@ func TestScanPS1GroupsDiscsAndIgnoresReferencedBins(t *testing.T) {
 	writePS1Disc(t, filepath.Join(root, "Final Fantasy VII"), "Disc 2", "SCUS_941.64")
 	writePS1Disc(t, root, "Castlevania - Symphony of the Night", "SLUS_000.67")
 
-	s := catalog.NewScanner(catalog.NewMemoryCache())
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
 	res, err := s.ScanPS1(context.Background(), root)
 	if err != nil {
 		t.Fatalf("ScanPS1: %v", err)
@@ -194,7 +195,7 @@ func TestScanPS1BareBinIsStillFound(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "Castlevania SOTN.bin"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	res, err := catalog.NewScanner(catalog.NewMemoryCache()).ScanPS1(context.Background(), root)
+	res, err := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner()).ScanPS1(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -204,7 +205,7 @@ func TestScanPS1BareBinIsStillFound(t *testing.T) {
 }
 
 func TestScanMissingDirectory(t *testing.T) {
-	s := catalog.NewScanner(catalog.NewMemoryCache())
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
 	if _, err := s.ScanPS2(context.Background(), filepath.Join(t.TempDir(), "nope")); err == nil {
 		t.Error("scanning a missing directory should fail")
 	}
@@ -222,7 +223,7 @@ func TestScanRespectsCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	res, err := catalog.NewScanner(catalog.NewMemoryCache()).ScanPS2(ctx, root)
+	res, err := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner()).ScanPS2(ctx, root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -240,7 +241,7 @@ func TestScanPS1ReportsBadCue(t *testing.T) {
 		0o600); err != nil {
 		t.Fatal(err)
 	}
-	res, err := catalog.NewScanner(catalog.NewMemoryCache()).ScanPS1(context.Background(), root)
+	res, err := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner()).ScanPS1(context.Background(), root)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +267,7 @@ func TestPersistentCacheSurvivesReopen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenCache: %v", err)
 	}
-	first, err := catalog.NewScanner(c1).ScanPS2(context.Background(), srcDir)
+	first, err := catalog.NewScanner(c1, external.NewFakeRunner()).ScanPS2(context.Background(), srcDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +283,7 @@ func TestPersistentCacheSurvivesReopen(t *testing.T) {
 	if c2.Len() != 2 {
 		t.Fatalf("the reopened cache holds %d entries, want 2", c2.Len())
 	}
-	second, err := catalog.NewScanner(c2).ScanPS2(context.Background(), srcDir)
+	second, err := catalog.NewScanner(c2, external.NewFakeRunner()).ScanPS2(context.Background(), srcDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -297,7 +298,7 @@ func TestPersistentCacheSurvivesReopen(t *testing.T) {
 	if err := os.Remove(filepath.Join(srcDir, "Other.iso")); err != nil {
 		t.Fatal(err)
 	}
-	third, err := catalog.NewScanner(c2).ScanPS2(context.Background(), srcDir)
+	third, err := catalog.NewScanner(c2, external.NewFakeRunner()).ScanPS2(context.Background(), srcDir)
 	if err != nil {
 		t.Fatal(err)
 	}

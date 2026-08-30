@@ -13,6 +13,7 @@ Two tools are needed to *write*:
 | `pfsfuse` | reaching `+OPL` and `__.POPS` | no artwork, no PS1 games |
 | `fusermount3` | releasing PFS mounts | ships with `fuse3` |
 | `lsblk` | `detect`, device identity | ships with `util-linux`; needs a build with `libudev` |
+| `7z` | reading and installing archived sources | `p7zip`; only needed for `.7z`/`.zip`/`.rar` libraries |
 
 `ps2hdd doctor` reports which are present and what each one is for.
 

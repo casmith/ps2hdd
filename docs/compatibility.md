@@ -238,6 +238,19 @@ multi-disc title, so grouping is by directory and base title instead, and each
 disc keeps its own serial. The first disc's serial becomes the title's
 identity, which is what OPL and POPStarter key artwork off.
 
+**Archived sources are read without unpacking.** A `.7z`, `.zip` or `.rar`
+holding one disc image is identified from the first 16 MiB of that image, which
+covers the ISO 9660 volume descriptor and the root directory. The serial comes
+from `SYSTEM.CNF` when it is reachable, and otherwise from the boot ELF in the
+root directory, which every PS2 disc names for its serial. That second route is
+allowed only for a partial read: with the whole image available there is no
+reason to infer anything. Installing extracts to scratch space first, because
+hdl_dump seeks around the image it injects and cannot read a pipe.
+
+**Both CD sector layouts are accepted.** A DVD-based title, or a BIN converted
+to ISO, is a plain 2048-byte stream; a CD-based title ripped raw is MODE2/2352,
+with sync and header bytes around each block. Both are tried, 2048 first.
+
 **POPS.ELF and IOPRP252.IMG are Sony code.** ps2hdd does not ship them, cannot
 ship them, and will not. It detects their absence, explains it, and imports
 copies the user supplies with `ps2hdd setup ps1 --import <dir>`. Only files

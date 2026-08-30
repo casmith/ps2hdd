@@ -41,6 +41,14 @@ type SourcesConfig struct {
 type InstallConfig struct {
 	SyncAssets         bool `toml:"sync_assets" json:"sync_assets"`
 	VerifyAfterInstall bool `toml:"verify_after_install" json:"verify_after_install"`
+	// ScratchDir is where an archived image is decompressed before it is
+	// injected. Empty means the cache directory.
+	//
+	// It matters where this points. A DVD rip is up to 4.7 GB, and on a
+	// distribution that mounts /tmp as tmpfs the default temporary directory
+	// is RAM. The cache directory is on disk, and this exists so a user with
+	// a small home partition can send it somewhere larger.
+	ScratchDir string `toml:"scratch_dir,omitempty" json:"scratch_dir,omitempty"`
 }
 
 // AssetsConfig selects the artwork provider and the slots to fetch.

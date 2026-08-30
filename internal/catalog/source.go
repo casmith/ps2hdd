@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
@@ -28,6 +29,20 @@ const maxScanDepth = 6
 // are only ever used to decide what is worth opening; identity always comes
 // from the image itself.
 var ps2Extensions = map[string]bool{".iso": true, ".bin": true, ".img": true}
+
+// ps2ScanExtensions is what the walk actually collects: loose images plus the
+// archives that hold one. Identification happens the same way for both; only
+// the reader differs.
+var ps2ScanExtensions = func() map[string]bool {
+	m := map[string]bool{}
+	for e := range ps2Extensions {
+		m[e] = true
+	}
+	for _, e := range []string{".7z", ".zip", ".rar"} {
+		m[e] = true
+	}
+	return m
+}()
 
 // ps1Extensions are the PS1 entry points. A .cue takes precedence over the
 // .bin it references, and a .bin named by a .cue is never listed separately.
@@ -61,15 +76,18 @@ type Scanner struct {
 	// bound, usually against a NAS, so a handful of readers helps and a
 	// hundred does not.
 	Concurrency int
+	// Archive opens compressed sources. When its tool is not installed,
+	// archives are reported as skipped rather than silently passed over.
+	Archive external.Archive
 }
 
 // NewScanner returns a scanner with sensible defaults.
-func NewScanner(cache *Cache) *Scanner {
+func NewScanner(cache *Cache, runner external.Runner) *Scanner {
 	n := runtime.NumCPU()
 	if n > 4 {
 		n = 4
 	}
-	return &Scanner{Cache: cache, Concurrency: n}
+	return &Scanner{Cache: cache, Concurrency: n, Archive: external.Archive{Runner: runner}}
 }
 
 // ScanPS2 walks a directory for PS2 disc images.
@@ -78,12 +96,21 @@ func (s *Scanner) ScanPS2(ctx context.Context, root string) (ScanResult, error) 
 	if root == "" {
 		return res, nil
 	}
-	files, err := s.collect(root, ps2Extensions, nil)
+	files, err := s.collect(root, ps2ScanExtensions, nil)
 	if err != nil {
 		return res, err
 	}
 
+	_, haveArchiveTool := s.Archive.Available()
 	outcomes := s.inspectAll(ctx, files, func(path string) (model.Game, error) {
+		if external.IsArchive(path) {
+			if !haveArchiveTool {
+				return model.Game{}, fmt.Errorf("%s is an archive; install %s to read inside it",
+					filepath.Base(path), external.SevenZipTool)
+			}
+			g, _, err := InspectArchivedPS2(ctx, s.Archive, path)
+			return g, err
+		}
 		img, err := ps2.Inspect(path)
 		if err != nil {
 			return model.Game{}, err

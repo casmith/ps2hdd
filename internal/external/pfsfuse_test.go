@@ -113,3 +113,69 @@ func TestMkPartScript(t *testing.T) {
 		t.Errorf("MkPartScript = %q, want %q", got, want)
 	}
 }
+
+func TestParseSevenZipList(t *testing.T) {
+	// Real `7z l -slt` output, trimmed to the parts that matter.
+	const out = `
+Listing archive: Devil May Cry (USA).7z
+
+--
+Path = Devil May Cry (USA).7z
+Type = 7z
+
+----------
+Path = Devil May Cry (USA).iso
+Size = 4698767360
+Packed Size = 1956058463
+Attributes = A
+CRC = 01E8EAC9
+
+Path = extras
+Size = 0
+Attributes = D_ drwxr-xr-x
+
+Path = extras/readme.txt
+Size = 42
+Attributes = A
+
+`
+	got := ParseSevenZipList(out)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2 (the directory must not be one): %+v", len(got), got)
+	}
+	if got[0].Name != "Devil May Cry (USA).iso" || got[0].SizeBytes != 4698767360 {
+		t.Errorf("entry 0 = %+v", got[0])
+	}
+	if got[1].Name != "extras/readme.txt" || got[1].SizeBytes != 42 {
+		t.Errorf("entry 1 = %+v", got[1])
+	}
+}
+
+func TestIsArchive(t *testing.T) {
+	for _, ok := range []string{"a.7z", "A.ZIP", "b.rar", "/path/to/Game (USA).7z"} {
+		if !IsArchive(ok) {
+			t.Errorf("IsArchive(%q) = false", ok)
+		}
+	}
+	// A Synology share writes a sidecar beside every file; opening one because
+	// its name contains ".7z" would be a scan full of spurious errors.
+	for _, no := range []string{"a.iso", "Game (USA).7z@SynoEAStream", "b", "c.7z.part"} {
+		if IsArchive(no) {
+			t.Errorf("IsArchive(%q) = true", no)
+		}
+	}
+}
+
+func TestArchiveArgs(t *testing.T) {
+	if got := strings.Join(ListArgs("/x/a.7z"), " "); got != "l -slt /x/a.7z" {
+		t.Errorf("ListArgs = %q", got)
+	}
+	if got := strings.Join(StreamArgs("/x/a.7z", "a.iso"), " "); got != "e -so /x/a.7z a.iso" {
+		t.Errorf("StreamArgs = %q", got)
+	}
+	// -y matters: without it 7z waits forever on an overwrite prompt that no
+	// stdin is attached to.
+	if got := strings.Join(ExtractArgs("/x/a.7z", "a.iso", "/scratch"), " "); got != "e -y -o/scratch /x/a.7z a.iso" {
+		t.Errorf("ExtractArgs = %q", got)
+	}
+}

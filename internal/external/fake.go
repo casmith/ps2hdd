@@ -3,6 +3,7 @@ package external
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"sync"
 )
@@ -75,6 +76,19 @@ func (f *FakeRunner) Run(ctx context.Context, c Command) (Result, error) {
 		}
 	}
 	return res, err
+}
+
+// Stream implements Runner by handing fn the canned stdout for the tool.
+//
+// The fake serves the whole response at once. A real stream arrives in pieces
+// and may be cut off mid-read, so a caller that depends on chunk boundaries
+// will pass here and fail in the field; read to what you need and no further.
+func (f *FakeRunner) Stream(ctx context.Context, c Command, fn func(io.Reader) error) error {
+	res, err := f.Run(ctx, c)
+	if err != nil {
+		return err
+	}
+	return fn(strings.NewReader(res.Stdout))
 }
 
 // Calls returns every command the fake was asked to run.

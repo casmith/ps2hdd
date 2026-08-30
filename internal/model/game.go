@@ -64,6 +64,11 @@ type Game struct {
 	Discs          []Disc    `json:"discs,omitempty"`
 	Installed      bool      `json:"installed"`
 	SourcePath     string    `json:"source_path,omitempty"`
+	// ArchiveMember is the path inside SourcePath when the source is an
+	// archive rather than a loose image. Empty for a loose image, and that
+	// emptiness is what every caller tests to decide whether the source can
+	// be handed straight to hdl_dump or has to be extracted first.
+	ArchiveMember string `json:"archive_member,omitempty"`
 
 	// PartitionName is the APA partition backing an installed PS2 game, or the
 	// VCD file name of an installed PS1 game. Empty for source-only entries.
