@@ -451,7 +451,10 @@ func (m *Model) activeTable() *components.Table {
 // layout resizes the tables for the current terminal size.
 func (m *Model) layout() {
 	w := m.contentWidth()
-	h := m.contentHeight()
+	h := m.contentHeight() - tableChrome
+	if h < 2 {
+		h = 2
+	}
 	for _, t := range []*components.Table{m.ps2Table, m.ps1Table, m.instTable, m.artTable} {
 		t.SetSize(w, h)
 	}
@@ -486,13 +489,29 @@ func (m *Model) wrap(s string) string {
 	return lipgloss.NewStyle().Width(m.contentWidth()).Render(s)
 }
 
+// contentHeight is the number of lines available to the sidebar-and-body row.
+//
+// View joins header, body, status and footer with newlines, so the fixed
+// chrome is exactly those three lines. It used to subtract a further two for
+// blank lines that are not there, which made the budget look tighter than it
+// was while the real overflow came from somewhere else -- see tableChrome.
 func (m *Model) contentHeight() int {
-	h := m.height - headerHeight - footerHeight - statusHeight - 2
+	h := m.height - headerHeight - statusHeight - footerHeight
 	if h < 3 {
 		h = 3
 	}
 	return h
 }
+
+// tableChrome is the number of lines a table view draws around its table: a
+// title, a blank line, another blank line, and a summary.
+//
+// The table is the only elastic thing on the screen, so it is what has to
+// shrink to make room. Sizing it to the full content height instead pushed the
+// frame past the bottom of the terminal, and a frame taller than the terminal
+// scrolls -- taking the header and the top of the sidebar off the top of the
+// screen, which is how this was reported.
+const tableChrome = 4
 
 // View renders the interface.
 func (m *Model) View() string {
@@ -519,7 +538,7 @@ func (m *Model) View() string {
 
 	screen := strings.Join([]string{
 		components.Header(m.width, "ps2hdd", m.headerRight()),
-		main,
+		m.fit(main),
 		m.renderStatus(),
 		components.Footer(m.width, m.hints()),
 	}, "\n")
@@ -528,6 +547,31 @@ func (m *Model) View() string {
 		return m.dialog.View(m.width, m.height)
 	}
 	return screen
+}
+
+// fit clamps the body to the height available to it.
+//
+// A frame one line taller than the terminal makes the terminal scroll, and
+// what scrolls off the top is the header and the top of the sidebar -- so the
+// sidebar looks like it has shifted upward with its top cut off, which is
+// nothing to do with the sidebar. Every view sizing itself correctly would
+// avoid this, and the table views now do; this makes it true by construction
+// for the ones that cannot, and for whatever gets added later.
+//
+// Truncation is visible rather than silent. A view whose content does not fit
+// says so on its last line, because content that vanished without a word is
+// how someone concludes the program is broken rather than the window small.
+func (m *Model) fit(body string) string {
+	limit := m.contentHeight()
+	lines := strings.Split(body, "\n")
+	if len(lines) <= limit {
+		return body
+	}
+	kept := lines[:limit]
+	hidden := len(lines) - limit + 1
+	kept[limit-1] = components.StyleMuted.Render(
+		fmt.Sprintf("  … %d more line(s); enlarge the window to see them", hidden))
+	return strings.Join(kept, "\n")
 }
 
 func (m *Model) headerRight() string {
