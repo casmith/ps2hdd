@@ -17,15 +17,21 @@ import (
 
 // DoctorReport is the machine-readable form of `ps2hdd doctor`.
 type DoctorReport struct {
-	Go       string                `json:"go"`
-	Version  string                `json:"version"`
-	Config   string                `json:"config"`
-	Log      string                `json:"log"`
-	Tools    []app.ToolStatus      `json:"tools"`
-	Device   DoctorDevice          `json:"device"`
-	Sources  []app.SourceDirStatus `json:"sources"`
-	Provider DoctorProvider        `json:"asset_provider"`
-	PS1      ps1.Readiness         `json:"ps1"`
+	Go      string           `json:"go"`
+	Version string           `json:"version"`
+	Config  string           `json:"config"`
+	Log     string           `json:"log"`
+	Tools   []app.ToolStatus `json:"tools"`
+	// Distro is the detected host distribution, and Remedies say how to
+	// obtain each missing tool on it. A diagnosis without a next step is
+	// half a diagnosis.
+	Distro    app.Distro            `json:"distro"`
+	Remedies  []app.ToolRemedy      `json:"remedies,omitempty"`
+	ToolsHint string                `json:"tools_hint,omitempty"`
+	Device    DoctorDevice          `json:"device"`
+	Sources   []app.SourceDirStatus `json:"sources"`
+	Provider  DoctorProvider        `json:"asset_provider"`
+	PS1       ps1.Readiness         `json:"ps1"`
 	// CrossCheck compares the native APA reader against hdl_dump. It is the
 	// check that says whether the foundation everything else stands on is
 	// sound, so it is part of the routine report rather than a separate tool.
@@ -110,6 +116,7 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 	}
 
 	rep.Tools = env.Svc.Tools()
+	rep.Distro = app.DetectDistro()
 	for _, t := range rep.Tools {
 		if t.Present {
 			continue
@@ -121,6 +128,10 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 			rep.Problems = append(rep.Problems,
 				fmt.Sprintf("%s is not installed, so %s will not work. Reading the library still does.", t.Name, t.Purpose))
 		}
+		rep.Remedies = append(rep.Remedies, app.Remedy(t.Name, rep.Distro))
+	}
+	if len(rep.Remedies) > 0 {
+		rep.ToolsHint = app.InstallHint()
 	}
 
 	rep.Device.Configured = env.Config.Device
@@ -226,6 +237,32 @@ func renderDoctor(env *Env, rep DoctorReport) {
 		fmt.Fprintf(t, "%s\t%s\t%s\n", tool.Name, status, dim(tool.Purpose))
 	}
 	t.Flush()
+
+	// Printed straight after the tool table, where the missing ones are, so
+	// the fix is next to the finding rather than in a file the reader has to
+	// know exists.
+	if len(rep.Remedies) > 0 {
+		title := "How to install what is missing"
+		if rep.Distro.Known() {
+			title += " (" + rep.Distro.Name + ")"
+		}
+		section(env.Out, title)
+		for _, r := range rep.Remedies {
+			env.printf("  %s\n", bold(r.Tool))
+			if r.Note != "" {
+				env.printf("    %s\n", dim(r.Note))
+			}
+			for _, c := range r.Commands {
+				env.printf("    %s %s\n", dim("$"), c)
+			}
+			if len(r.Commands) == 0 && r.Note == "" {
+				env.printf("    %s\n", dim("see docs/dependencies.md"))
+			}
+		}
+		if rep.ToolsHint != "" {
+			env.printf("\n  %s %s\n", dim("note:"), rep.ToolsHint)
+		}
+	}
 
 	section(env.Out, "PS2 HDD")
 	if !rep.Device.OK {

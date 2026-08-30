@@ -15,7 +15,11 @@ Two tools are needed to *write*:
 | `lsblk` | `detect`, device identity | ships with `util-linux`; needs a build with `libudev` |
 | `7z` | reading and installing archived sources | `p7zip`; only needed for `.7z`/`.zip`/`.rar` libraries |
 
-`ps2hdd doctor` reports which are present and what each one is for.
+`ps2hdd doctor` reports which are present and what each one is for. When
+something is missing it also prints the commands to get it, chosen for the
+distribution it detects from `/etc/os-release` -- the same commands as this
+page, at the moment you need them. An unrecognised distribution gets the
+explanation and a pointer here rather than an invented package manager.
 
 ---
 
