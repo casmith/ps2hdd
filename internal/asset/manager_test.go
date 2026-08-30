@@ -343,8 +343,10 @@ func TestInstallRefusesUndecodableArt(t *testing.T) {
 //
 // pfsfuse implements ftruncate but not truncate, so O_TRUNC on an existing
 // file comes back ENOSYS and every overwrite fails while every first write
-// succeeds. The mechanism is asserted through the inode: truncating keeps it,
-// unlinking and recreating does not.
+// succeeds. The mechanism is asserted through a hard link: truncating writes
+// through to every link, while unlinking and recreating leaves the other link
+// holding the original bytes. Inode numbers cannot be used for this -- a
+// filesystem is free to hand the freed inode straight back.
 func TestOverwriteReplacesTheFileRatherThanTruncatingIt(t *testing.T) {
 	mirror := t.TempDir()
 	if err := os.WriteFile(filepath.Join(mirror, "SLUS_210.50_COV.png"), pngBytes(t), 0o600); err != nil {
@@ -355,12 +357,13 @@ func TestOverwriteReplacesTheFileRatherThanTruncatingIt(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(dest, []byte("stale"), 0o600); err != nil {
+	const stale = "stale artwork"
+	if err := os.WriteFile(dest, []byte(stale), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.Stat(dest)
-	if err != nil {
-		t.Fatal(err)
+	witness := filepath.Join(opl, "witness.bin")
+	if err := os.Link(dest, witness); err != nil {
+		t.Skipf("hard links unavailable here: %v", err)
 	}
 
 	games := []model.Game{{Platform: model.PlatformPS2, GameID: "SLUS_210.50", Title: "Burnout 3"}}
@@ -381,13 +384,6 @@ func TestOverwriteReplacesTheFileRatherThanTruncatingIt(t *testing.T) {
 		t.Fatalf("result = %+v", res)
 	}
 
-	after, err := os.Stat(dest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sameFile(before, after) {
-		t.Error("the file was truncated in place; pfsfuse has no truncate and would refuse it")
-	}
 	got, err := os.ReadFile(dest)
 	if err != nil {
 		t.Fatal(err)
@@ -395,6 +391,13 @@ func TestOverwriteReplacesTheFileRatherThanTruncatingIt(t *testing.T) {
 	if !bytes.Equal(got, pngBytes(t)) {
 		t.Errorf("overwrite did not install the new bytes (%d bytes)", len(got))
 	}
+	// The witness still holds the old bytes only if the old file was unlinked.
+	// Truncation would have emptied it and written the new image through it.
+	held, err := os.ReadFile(witness)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(held) != stale {
+		t.Errorf("the file was truncated in place; pfsfuse has no truncate and would refuse it.\nwitness holds %d bytes, want the original %q", len(held), stale)
+	}
 }
-
-func sameFile(a, b os.FileInfo) bool { return os.SameFile(a, b) }
