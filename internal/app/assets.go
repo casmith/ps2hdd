@@ -118,6 +118,13 @@ func (s *Services) SyncAssets(ctx context.Context, games []model.Game, opts Sync
 		if s.DryRun {
 			return nil
 		}
+		// One clear failure beats one per file. A mount that will not take a
+		// probe byte will not take any of the artwork either, and finding
+		// that out now means the report names the cause instead of repeating
+		// the same errno against thirty different paths.
+		if err := asset.CheckWritable(mp); err != nil {
+			return err
+		}
 		// Ensure the OPL directories exist before writing into them; a fresh
 		// +OPL partition has neither ART nor CFG.
 		for _, d := range []string{asset.ArtDir, asset.CfgDir} {
