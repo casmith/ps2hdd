@@ -25,6 +25,10 @@ type DoctorReport struct {
 	Sources  []app.SourceDirStatus `json:"sources"`
 	Provider DoctorProvider        `json:"asset_provider"`
 	PS1      ps1.Readiness         `json:"ps1"`
+	// CrossCheck compares the native APA reader against hdl_dump. It is the
+	// check that says whether the foundation everything else stands on is
+	// sound, so it is part of the routine report rather than a separate tool.
+	CrossCheck app.CrossCheck `json:"crosscheck"`
 	// Problems lists the findings that need action, in the order to act on them.
 	Problems []string `json:"problems,omitempty"`
 }
@@ -62,7 +66,12 @@ anything that is not working.
 
 Reading the library needs no external tools at all: ps2hdd parses the APA
 partition table itself. hdl_dump is only needed to install and remove PS2
-games, and pfsfuse only to reach +OPL and __.POPS.`,
+games, and pfsfuse only to reach +OPL and __.POPS.
+
+When hdl_dump is installed and can read the drive, the installed library is
+also read twice -- natively and through hdl_dump -- and the two are compared.
+That native parse is what every listing and every install decision rests on, so
+a disagreement is reported as a problem and no write should follow.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			rep := buildDoctorReport(cmd.Context(), env)
@@ -165,6 +174,13 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 				rep.Problems = append(rep.Problems, ready.Explain()...)
 			}
 		}
+		if cc, err := env.Svc.CrossCheckReader(ctx); err == nil {
+			rep.CrossCheck = cc
+			for _, d := range cc.Disagreements {
+				rep.Problems = append(rep.Problems,
+					"ps2hdd and hdl_dump disagree about the library: "+d+". Do not write to this disk.")
+			}
+		}
 	}
 	return rep
 }
@@ -219,6 +235,35 @@ func renderDoctor(env *Env, rep DoctorReport) {
 			{"PS2 games", fmt.Sprintf("%d", rep.Device.PS2Games)},
 			{"PS1 games", fmt.Sprintf("%d", rep.Device.PS1Games)},
 		})
+	}
+
+	if rep.Device.OK {
+		section(env.Out, "Reader cross-check")
+		// Printed whether or not it ran. An omitted section would let "could
+		// not check" read as "checked and fine", which is the one conclusion
+		// this must never invite.
+		switch {
+		case rep.CrossCheck.Agree():
+			kv(env.Out, [][2]string{
+				{"ps2hdd", fmt.Sprintf("%d game(s)", rep.CrossCheck.NativeGames)},
+				{"hdl_dump", fmt.Sprintf("%d game(s)", rep.CrossCheck.ReferenceGames)},
+				{"Agreement", green("OK")},
+			})
+		case rep.CrossCheck.Ran:
+			kv(env.Out, [][2]string{
+				{"ps2hdd", fmt.Sprintf("%d game(s)", rep.CrossCheck.NativeGames)},
+				{"hdl_dump", fmt.Sprintf("%d game(s)", rep.CrossCheck.ReferenceGames)},
+				{"Agreement", red("MISMATCH")},
+			})
+			for _, d := range rep.CrossCheck.Disagreements {
+				env.printf("  %s %s\n", red("-"), d)
+			}
+		default:
+			kv(env.Out, [][2]string{
+				{"Agreement", dim("not checked")},
+				{"Reason", firstLine(rep.CrossCheck.Unavailable)},
+			})
+		}
 	}
 
 	section(env.Out, "Support")
