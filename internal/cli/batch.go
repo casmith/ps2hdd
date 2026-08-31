@@ -39,8 +39,11 @@ type BatchReport struct {
 	// rather than tried, so the run does exactly what the plan promised.
 	NotAttempted []string `json:"not_attempted,omitempty"`
 	// Warnings are the per-install caveats, kept with the title they came from.
-	Warnings  []string `json:"warnings,omitempty"`
-	Cancelled bool     `json:"cancelled,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
+	// UnpackedAhead counts titles that arrived already unpacked. All but the
+	// first of them overlapped a write; the first has nothing to overlap.
+	UnpackedAhead int  `json:"unpacked_ahead,omitempty"`
+	Cancelled     bool `json:"cancelled,omitempty"`
 }
 
 // BatchFailure is one title that could not be installed.
@@ -69,6 +72,14 @@ func runBatch(env *Env, ctx context.Context, plan app.InstallPlan, opts app.Inst
 		// renderPlan has already said why, so saying it again adds nothing.
 		return nil
 	}
+
+	// Unpack ahead: the decompression of the next title runs while the current
+	// one is being written, which is otherwise dead time on both the drive and
+	// the CPU. Stop releases anything unpacked but never reached, including
+	// after an interrupt.
+	pre := env.Svc.StartPrefetch(ctx, todo, env.Config.Install.Prefetch, opts)
+	defer pre.Stop()
+	opts.Prefetch = pre
 
 	for i, g := range todo {
 		if ctx.Err() != nil {
@@ -99,6 +110,7 @@ func runBatch(env *Env, ctx context.Context, plan app.InstallPlan, opts app.Inst
 		}
 	}
 
+	rep.UnpackedAhead = pre.Hits()
 	if env.JSON {
 		return env.emitJSON(rep)
 	}
@@ -120,6 +132,13 @@ func renderBatch(env *Env, rep BatchReport, attempted int) {
 	if len(rep.NotAttempted) > 0 {
 		pairs = append(pairs, [2]string{"No room for",
 			dim(fmt.Sprintf("%d, not attempted", len(rep.NotAttempted)))})
+	}
+	if rep.UnpackedAhead > 0 {
+		// Counted, not claimed: the first title's extraction cannot overlap a
+		// write because there is no write yet, so this is how many arrived
+		// already unpacked rather than how many hid behind something.
+		pairs = append(pairs, [2]string{"Unpacked ahead",
+			dim(fmt.Sprintf("%d of %d", rep.UnpackedAhead, attempted))})
 	}
 	if rep.Cancelled {
 		pairs = append(pairs, [2]string{"Stopped", amber("interrupted")})

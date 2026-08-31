@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -175,6 +176,20 @@ func repairLaunchers(env *Env, cmd *cobra.Command) error {
 	return nil
 }
 
+// effectiveScratch shows where extraction will actually write. An unset value
+// is not unknown -- it has a default, and that default is what a reader needs
+// when deciding whether there is room in it.
+func effectiveScratch(env *Env) string {
+	if env.Config.Install.ScratchDir != "" {
+		return env.Config.Install.ScratchDir
+	}
+	root, err := env.Svc.ScratchRoot()
+	if err != nil {
+		return dim("unknown")
+	}
+	return root + dim(" (default)")
+}
+
 // createPOPSPartition runs the partition creation half of `setup ps1`.
 //
 // It is a write to the drive, so it confirms first unless the user has opted
@@ -234,6 +249,9 @@ func newConfigCommand(env *Env) *cobra.Command {
 					{"sources.ps1", orDash(env.Config.Sources.PS1)},
 					{"install.sync_assets", fmt.Sprintf("%v", env.Config.Install.SyncAssets)},
 					{"install.verify_after_install", fmt.Sprintf("%v", env.Config.Install.VerifyAfterInstall)},
+					{"install.widescreen", fmt.Sprintf("%v", env.Config.Install.Widescreen)},
+					{"install.prefetch", fmt.Sprintf("%d", env.Config.Install.Prefetch)},
+					{"install.scratch_dir", effectiveScratch(env)},
 					{"assets.provider", env.Config.Assets.Provider},
 					{"assets.mirror", orDash(env.Config.Assets.Mirror)},
 					{"assets.covers", fmt.Sprintf("%v", env.Config.Assets.Covers)},
@@ -307,6 +325,14 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 		cfg.Assets.Provider = value
 	case "assets.mirror":
 		cfg.Assets.Mirror = config.ExpandPath(value)
+	case "install.prefetch":
+		n, err := strconv.Atoi(strings.TrimSpace(value))
+		if err != nil || n < 0 {
+			return fmt.Errorf("install.prefetch takes a whole number of titles, not %q", value)
+		}
+		cfg.Install.Prefetch = n
+	case "install.scratch_dir":
+		cfg.Install.ScratchDir = config.ExpandPath(value)
 	case "tools.hdl_dump":
 		cfg.Tools.HDLDump = value
 	case "tools.pfsfuse":
@@ -323,6 +349,8 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 			cfg.Install.SyncAssets = b
 		case "install.verify_after_install":
 			cfg.Install.VerifyAfterInstall = b
+		case "install.widescreen":
+			cfg.Install.Widescreen = b
 		case "assets.covers":
 			cfg.Assets.Covers = b
 		case "assets.backgrounds":

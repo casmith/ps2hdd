@@ -390,6 +390,26 @@ time.
 the drive are skipped — the same answer a saved position would have given, and
 one that cannot go stale.
 
+**The next title is unpacked while the current one is written.** The two halves
+of an archived install use different machines — LZMA on one core plus a write
+to scratch, then hdl_dump pushing raw sectors at the drive — and run in
+sequence they simply add up. On a measured library the extraction is the larger
+half, around seventy seconds for a DVD-sized title, during which the drive is
+idle and fifteen of sixteen cores are too, because a solid LZMA stream cannot
+be split.
+
+Only extraction overlaps. Injection stays strictly serial: hdl_dump rewrites
+the APA partition table, and two at once is not something it survives.
+
+`install.prefetch` is the depth, default 2 — the title being installed and the
+one after it. It is a **disk budget** before it is a concurrency setting: each
+unpacked title is up to 4.7 GB in the scratch directory, so raising it costs
+that much space per extra slot and buys nothing once the writer never waits.
+Set it to 1 to turn the pipeline off.
+
+The run reports how many titles arrived already unpacked, which is the only
+evidence it did anything.
+
 ### Compressed sources
 
 A PS2 library kept as `.7z`, `.zip` or `.rar` archives is read in place. One

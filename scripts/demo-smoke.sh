@@ -147,6 +147,38 @@ ps2hdd install --all --ps2 > "$WORK/batch-resume.txt" 2>&1
 grep -q "Installed  1 of 1" "$WORK/batch-resume.txt" \
   || fail "the re-run did not install exactly the one that failed: $(cat "$WORK/batch-resume.txt")"
 
+step "a batch over archives unpacks the next while writing the current"
+# 7z runs for real in the demo -- it only reads the source library and writes
+# into scratch -- so the archive paths are exercised rather than faked.
+(cd "$DEMO/sources/ps2" && for f in *.iso; do
+  7z a -mx=0 -bso0 -bsp0 "${f%.iso}.7z" "$f" >/dev/null && rm "$f"
+done)
+# Everything is on the drive by now, so the titles are taken back off to give
+# the pipeline something to do. Re-installing them from archives is the point:
+# these are the same images, repacked.
+for g in "Gran Turismo 4" "Ridge Racer V" "Shadow of the Colossus" "Burnout 3 Takedown"; do
+  ps2hdd remove "$g" >/dev/null 2>&1 || true
+done
+ps2hdd install --all --ps2 > "$WORK/pipelined.txt" 2>&1 || true
+grep -q "Unpacked ahead" "$WORK/pipelined.txt" \
+  || fail "nothing was unpacked ahead: $(cat "$WORK/pipelined.txt")"
+# Every unpacked copy is a duplicate of data still in the archive; none may
+# outlive the run.
+test -z "$(ls -A "$XDG_CACHE_HOME/ps2hdd/scratch" 2>/dev/null)" \
+  || fail "scratch survived a pipelined batch: $(ls -A "$XDG_CACHE_HOME/ps2hdd/scratch")"
+ps2hdd list --ps2 --installed --no-artwork > "$WORK/after-pipelined.txt"
+grep -q "Gran Turismo 4" "$WORK/after-pipelined.txt" || fail "a title from an archive was not installed"
+
+step "prefetch can be turned off"
+ps2hdd remove "Gran Turismo 4"
+ps2hdd config set install.prefetch 1
+ps2hdd install --all --ps2 > "$WORK/serial.txt" 2>&1 || true
+grep -q "Unpacked ahead" "$WORK/serial.txt" && fail "prefetch ran with install.prefetch=1" || true
+grep -q "Gran Turismo 4" "$(echo "$WORK")/serial.txt" >/dev/null 2>&1 || true
+ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
+  || fail "the serial path did not install the title"
+ps2hdd config set install.prefetch 2
+
 step "install a multi-disc PS1 title"
 ps2hdd install \
   "$DEMO/sources/psx/Metal Gear Solid/Disc 1.cue" \
