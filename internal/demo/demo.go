@@ -316,7 +316,25 @@ func writeSparse(path string, data []byte) error {
 }
 
 // handle stands in for the external tools.
+// failSubstring names a title the fake hdl_dump should refuse to inject.
+//
+// It exists so the demo can exercise a failing install, which is the one shape
+// the synthetic environment cannot produce on its own: the fake never reads
+// the source image, so corrupting or deleting one changes nothing. What needs
+// testing is not the failure but what happens around it -- that a batch of
+// several hundred titles carries on past a bad one -- and that cannot be
+// tested without a bad one.
+const failEnv = "PS2HDD_DEMO_FAIL"
+
 func (e *Env) handle(c external.Command) (external.Result, error) {
+	if want := os.Getenv(failEnv); want != "" && c.Name == external.HDLDumpTool {
+		for _, a := range c.Args {
+			if strings.Contains(a, want) {
+				return external.Result{Stderr: "demo: injected failure"},
+					fmt.Errorf("hdl_dump: injected failure for %q", want)
+			}
+		}
+	}
 	switch c.Name {
 	case external.PFSFuseTool:
 		return external.Result{}, e.mount(c.Args)

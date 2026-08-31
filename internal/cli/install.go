@@ -9,7 +9,6 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/catalog"
-	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
@@ -85,7 +84,12 @@ fits on its own.
 A directory of symbolic links is not an alternative: the source scanner reads
 regular files only, so links are skipped without comment.
 
---all and --from-list currently require --dry-run. Planning is the safe half; running a
+Add --dry-run to plan without writing. Without it the run installs everything
+the plan says fits, and names the rest rather than trying them: a single
+failure stops that title and nothing else, because across several hundred
+titles one bad archive is close to certain and aborting for it would waste the
+hours already spent. There is no resume state -- run the same command again and
+titles already on the drive are skipped. Planning is the safe half; running a
 several-hundred-title write has questions about ordering, resuming and partial
 failure that are not settled yet.
 
@@ -94,6 +98,18 @@ command established.`,
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			syncAssets := env.Config.Install.SyncAssets && !noAssets
+			widescreen := env.Config.Install.Widescreen
+			if cmd.Flags().Changed("widescreen") {
+				widescreen = wantWidescreen
+			}
+			opts := app.InstallOptions{
+				Title:      title,
+				Hidden:     hidden,
+				SyncAssets: syncAssets,
+				Widescreen: widescreen,
+			}
 
 			if all && fromList != "" {
 				return fmt.Errorf("--all and --from-list select different things; use one")
@@ -106,14 +122,29 @@ command established.`,
 				if len(args) > 0 {
 					return fmt.Errorf("%s chooses what to install; do not name images as well", which)
 				}
-				if !env.Svc.DryRun {
-					return fmt.Errorf("%s is planning only for now: add --dry-run", which)
+				popts := app.PlanOptions{PS2: onlyPS2, PS1: onlyPS1}
+				plan, err := buildPlan(env, ctx, fromList, popts)
+				if err != nil {
+					return err
 				}
-				opts := app.PlanOptions{PS2: onlyPS2, PS1: onlyPS1}
-				if fromList != "" {
-					return planList(env, ctx, config.ExpandPath(fromList), opts)
+				if env.Svc.DryRun {
+					return renderPlan(env, plan, nil)
 				}
-				return planAll(env, ctx, opts)
+				if err := renderPlan(env, plan, nil); err != nil {
+					return err
+				}
+				// One confirmation for the run, not one per title: a batch
+				// that asked five hundred times would be answered by holding
+				// down a key, which is not consent.
+				if !env.Svc.AssumeYes && env.Config.TUI.ConfirmDestructiveActions {
+					if !confirm(env.In, env.Out, "Install these?") {
+						env.printf("Nothing was installed.\n")
+						return nil
+					}
+				}
+				bopts := opts
+				bopts.Title = ""
+				return runBatch(env, ctx, plan, bopts)
 			}
 			if len(args) == 0 {
 				return fmt.Errorf("name a disc image, or use --all or --from-list to plan a set")
@@ -141,18 +172,6 @@ command established.`,
 					return err
 				}
 				games = []model.Game{g}
-			}
-
-			syncAssets := env.Config.Install.SyncAssets && !noAssets
-			widescreen := env.Config.Install.Widescreen
-			if cmd.Flags().Changed("widescreen") {
-				widescreen = wantWidescreen
-			}
-			opts := app.InstallOptions{
-				Title:      title,
-				Hidden:     hidden,
-				SyncAssets: syncAssets,
-				Widescreen: widescreen,
 			}
 
 			var reports []app.InstallReport
