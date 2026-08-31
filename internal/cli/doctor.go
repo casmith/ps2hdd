@@ -33,6 +33,10 @@ type DoctorReport struct {
 	Provider  DoctorProvider        `json:"asset_provider"`
 	PS1       ps1.Readiness         `json:"ps1"`
 	Launchers app.LauncherAudit     `json:"ps1_launchers"`
+	// ScratchBytes is space left behind by a run that was killed before its
+	// cleanup could run.
+	ScratchDirs  int   `json:"scratch_dirs,omitempty"`
+	ScratchBytes int64 `json:"scratch_bytes,omitempty"`
 	// CrossCheck compares the native APA reader against hdl_dump. It is the
 	// check that says whether the foundation everything else stands on is
 	// sound, so it is part of the routine report rather than a separate tool.
@@ -195,6 +199,17 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 		} else {
 			rep.Provider.OK = true
 		}
+	}
+
+	// Scratch is checked whatever the drive is doing: leftovers are on the
+	// user's own filesystem and are just as real without a PS2 HDD attached.
+	if dirs, bytes, err := env.Svc.StaleScratch(); err == nil && len(dirs) > 0 {
+		rep.ScratchDirs = len(dirs)
+		rep.ScratchBytes = bytes
+		rep.Problems = append(rep.Problems, fmt.Sprintf(
+			"%s of scratch space in %d director(ies) was left behind by a run that did not "+
+				"finish cleanly. The next install reclaims it, or remove them yourself.",
+			model.HumanSize(bytes), len(dirs)))
 	}
 
 	if rep.Device.OK {
