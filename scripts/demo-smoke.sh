@@ -182,6 +182,11 @@ done
 ps2hdd install --all --ps2 > "$WORK/pipelined.txt" 2>&1 || true
 grep -q "Unpacked ahead" "$WORK/pipelined.txt" \
   || fail "nothing was unpacked ahead: $(cat "$WORK/pipelined.txt")"
+# Waiting on the pipeline must say so. It used to leave the previous stage on
+# screen, so a run unpacking for a minute looked like one stuck checking the
+# drive -- which is how it was reported.
+grep -q "unpacking" "$WORK/pipelined.txt" \
+  || fail "the unpack wait was not reported: $(cat "$WORK/pipelined.txt")"
 # Every unpacked copy is a duplicate of data still in the archive; none may
 # outlive the run.
 test -z "$(ls -A "$XDG_CACHE_HOME/ps2hdd/scratch" 2>/dev/null)" \

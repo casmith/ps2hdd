@@ -191,100 +191,74 @@ func TestTakeOnATitleNeverQueued(t *testing.T) {
 	}
 }
 
-// How far ahead it runs is a disk budget before it is anything else: each
-// unpacked title is up to 4.7 GB, so an unbounded prefetcher would put a whole
-// library in the scratch directory. Depth 2 means one unpacked title waiting
-// while another is installed, and no more.
-func TestPrefetchStopsAtItsDepth(t *testing.T) {
-	games := []model.Game{archived("A"), archived("B"), archived("C"), archived("D")}
-	p := newTestPrefetcher(games...)
-
-	var mu sync.Mutex
-	var started []string
-	begun := make(chan struct{}, len(games))
-	p.unpackFn = func(_ context.Context, g model.Game) (*PrefetchedSource, error) {
-		mu.Lock()
-		started = append(started, g.Title)
-		mu.Unlock()
-		begun <- struct{}{}
-		return &PrefetchedSource{Path: "/scratch/" + g.Title, Release: func() {}}, nil
-	}
-
-	slots := make(chan struct{}, 1) // depth 2: one unpacked ahead
-	go p.run(context.Background(), games, slots)
-
-	// Exactly one unpack may happen before anything is taken.
-	<-begun
-	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	n := len(started)
-	mu.Unlock()
-	if n != 1 {
-		t.Fatalf("unpacked %d titles (%v) before any was taken; depth 2 allows 1", n, started)
-	}
-
-	// Taking the first releases the slot, and exactly one more follows.
-	src, ok := p.Take(context.Background(), games[0])
-	if !ok {
-		t.Fatal("the first title was not handed over")
-	}
-	src.Release()
-	<-begun
-	time.Sleep(100 * time.Millisecond)
-	mu.Lock()
-	n = len(started)
-	mu.Unlock()
-	if n != 2 {
-		t.Errorf("unpacked %d titles after one hand-over, want 2", n)
-	}
-	p.Stop()
-}
-
-// The slot belongs to the unpacked copy on disk, so it is released when the
-// installer takes it -- not when the extraction finishes. Freeing it early
-// would let the next extraction start while the previous copy is still there,
-// which is the budget blown by one image.
-func TestPrefetchHoldsTheSlotUntilHandOver(t *testing.T) {
-	games := []model.Game{archived("A"), archived("B")}
+// Two properties, and the first version of this tested only one of them.
+//
+// The bound is a disk budget: each unpacked title is up to 4.7 GB, so at most
+// `depth` copies may exist at once. The overlap is the entire point: while one
+// title is being installed, the next must be being unpacked.
+//
+// Testing only the bound is what let the pipeline ship pipelining nothing. A
+// slot is held from before the unpack until the installer has finished with the
+// copy, so sizing the channel at depth-1 left room for one copy in total and
+// forced strict alternation -- which satisfies "never more than two" perfectly
+// well, by never having more than one.
+func TestPrefetchOverlapsTheInstall(t *testing.T) {
+	games := []model.Game{archived("A"), archived("B"), archived("C")}
 	p := newTestPrefetcher(games...)
 	begun := make(chan string, len(games))
 	p.unpackFn = func(_ context.Context, g model.Game) (*PrefetchedSource, error) {
 		begun <- g.Title
 		return &PrefetchedSource{Release: func() {}}, nil
 	}
-	slots := make(chan struct{}, 1)
-	go p.run(context.Background(), games, slots)
+	go p.run(context.Background(), games, make(chan struct{}, slotsFor(2)))
 
 	if got := <-begun; got != "A" {
-		t.Fatalf("unpacked %s first", got)
+		t.Fatalf("unpacked %s first, want A", got)
 	}
-	// B must not start while A is unpacked and untaken.
-	select {
-	case got := <-begun:
-		t.Fatalf("unpacked %s while the previous copy was still on disk", got)
-	case <-time.After(200 * time.Millisecond):
+	// The installer takes A and is now busy writing it. It has not released
+	// the copy -- installPS2 defers that to the end -- so this is exactly the
+	// state the pipeline exists to exploit.
+	a, ok := p.Take(context.Background(), games[0])
+	if !ok {
+		t.Fatal("A was not handed over")
 	}
-	src, _ := p.Take(context.Background(), games[0])
-	src.Release()
 	select {
 	case got := <-begun:
 		if got != "B" {
-			t.Errorf("unpacked %s, want B", got)
+			t.Errorf("unpacked %s during A's install, want B", got)
 		}
 	case <-time.After(2 * time.Second):
-		t.Error("releasing the copy did not free the slot")
+		t.Fatal("nothing was unpacked while A was being installed: the pipeline is not overlapping")
+	}
+	// And no further: two copies on disk is the budget, and C must wait.
+	select {
+	case got := <-begun:
+		t.Errorf("unpacked %s as well; depth 2 allows two copies, not three", got)
+	case <-time.After(200 * time.Millisecond):
+	}
+	// Finishing with A frees its copy, and C follows.
+	a.Release()
+	select {
+	case got := <-begun:
+		if got != "C" {
+			t.Errorf("unpacked %s after A was released, want C", got)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("releasing a copy did not free its slot")
 	}
 	p.Stop()
 }
 
-// Depth counts the title being installed as well as the ones waiting, because
-// its unpacked copy is on disk too. Getting this off by one would either idle
-// the pipeline or put an extra image in scratch.
+// A slot stands for a copy on disk, not for a copy waiting to be collected --
+// it is held from before the unpack until the installer has finished with the
+// file. So depth maps to itself: depth 2 means two copies, one being written
+// and one being unpacked. Taking one off, on the reasoning that the title being
+// installed is not "waiting", leaves room for a single copy and turns the
+// pipeline into strict alternation.
 func TestSlotsForDepth(t *testing.T) {
-	cases := map[int]int{2: 1, 3: 2, 4: 3}
-	for depth, want := range cases {
+	for depth, want := range map[int]int{2: 2, 3: 3, 4: 4} {
 		if got := slotsFor(depth); got != want {
-			t.Errorf("depth %d allows %d waiting, want %d", depth, got, want)
+			t.Errorf("depth %d gives %d slots, want %d", depth, got, want)
 		}
 	}
 }

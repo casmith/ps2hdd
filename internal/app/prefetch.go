@@ -113,10 +113,20 @@ func (s *Services) StartPrefetch(ctx context.Context, games []model.Game, depth 
 	return p
 }
 
-// slotsFor is how many unpacked copies may sit waiting. Depth counts the title
-// being installed as well, since its unpacked copy is on disk too, so the
-// number waiting is one fewer.
-func slotsFor(depth int) int { return depth - 1 }
+// slotsFor is how many unpacked copies may exist at once, which is the depth
+// exactly.
+//
+// A slot is held from before a title is unpacked until the installer has
+// finished with it, so it stands for a copy on disk rather than for a copy
+// waiting to be collected. Making it depth-1 -- reasoning that the title being
+// installed is not "waiting" -- left room for one copy in total, which forces
+// strict alternation: unpack, install, unpack, install, with nothing ever
+// happening at the same time as anything else. The pipeline pipelined nothing.
+//
+// Two slots is what lets the next title be unpacked while the current one is
+// written, and the disk budget is unchanged: two slots, two copies, which is
+// what depth 2 was always supposed to mean.
+func slotsFor(depth int) int { return depth }
 
 func (p *Prefetcher) run(ctx context.Context, games []model.Game, slots chan struct{}) {
 	defer close(p.done)

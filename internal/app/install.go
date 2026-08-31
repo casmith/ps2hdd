@@ -299,7 +299,7 @@ func (s *Services) installPS2(ctx context.Context, g model.Game, opts InstallOpt
 					source = filepath.Join("<scratch>", filepath.Base(cue))
 				}
 			}
-		} else if pre, ok := opts.Prefetch.Take(ctx, g); ok {
+		} else if pre, ok := s.takePrefetched(ctx, g, opts); ok {
 			// Unpacked while the previous title was being written.
 			defer pre.Release()
 			source = pre.Path
@@ -606,7 +606,7 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	// An archived rip has to become real files before it can be converted:
 	// the converter reads the cuesheet and seeks around the data track.
 	if g.ArchiveMember != "" {
-		if pre, ok := opts.Prefetch.Take(ctx, g); ok {
+		if pre, ok := s.takePrefetched(ctx, g, opts); ok {
 			defer pre.Release()
 			g.Discs = pre.Discs
 		} else {
@@ -884,6 +884,20 @@ func (s *Services) vcdStaging(g model.Game) (string, error) {
 			g.Title, model.HumanSize(need), root, model.HumanSize(free))
 	}
 	return os.MkdirTemp(root, "vcd-")
+}
+
+// takePrefetched collects a title unpacked ahead, saying so while it waits.
+//
+// Waiting here is normal -- the installer has caught up with the pipeline -- but
+// it can be a minute of decompression, and without this the last thing reported
+// was the stage before it. A run sat on "checking the HDD" while it was in fact
+// unpacking, which reads as a hang and was reported as one.
+func (s *Services) takePrefetched(ctx context.Context, g model.Game, opts InstallOptions) (*PrefetchedSource, bool) {
+	if opts.Prefetch == nil || g.ArchiveMember == "" {
+		return nil, false
+	}
+	opts.OnProgress.report(StageExtracting, -1, g.Title)
+	return opts.Prefetch.Take(ctx, g)
 }
 
 // discFraction maps a per-disc fraction onto the whole title's progress.
