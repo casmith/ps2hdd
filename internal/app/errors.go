@@ -134,9 +134,18 @@ type InsufficientSpaceError struct {
 	Title  string
 	Needed int64
 	Free   int64
+	// Where names the space that ran out. A PS2 title needs unallocated APA
+	// chunks; a PS1 title needs room inside __.POPS, which is an already
+	// allocated partition. Naming it is the difference between a user
+	// deleting a game and a user growing a partition.
+	Where string
 }
 
 func (e *InsufficientSpaceError) Error() string {
-	return fmt.Sprintf("%s needs %s but only %s is free on the HDD",
-		e.Title, model.HumanSize(e.Needed), model.HumanSize(e.Free))
+	where := e.Where
+	if where == "" {
+		where = "the HDD"
+	}
+	return fmt.Sprintf("%s needs %s but only %s is free in %s",
+		e.Title, model.HumanSize(e.Needed), model.HumanSize(e.Free), where)
 }

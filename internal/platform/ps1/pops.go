@@ -304,11 +304,12 @@ func ScanPOPS(mount string) ([]model.Game, error) {
 			n = 1
 		}
 		b.discs = append(b.discs, model.Disc{
-			Number:        n,
-			GameID:        id,
-			Title:         title,
-			InstalledName: e.Name(),
-			SizeBytes:     size,
+			Number:           n,
+			GameID:           id,
+			Title:            title,
+			InstalledName:    e.Name(),
+			SizeBytes:        size,
+			InstallSizeBytes: size,
 		})
 		b.size += size
 	}
@@ -322,14 +323,15 @@ func ScanPOPS(mount string) ([]model.Game, error) {
 			title = b.gameID
 		}
 		out = append(out, model.Game{
-			Platform:       model.PlatformPS1,
-			Title:          title,
-			GameID:         b.discs[0].GameID,
-			SizeBytes:      b.size,
-			StorageBackend: model.BackendPOPS,
-			Installed:      true,
-			Discs:          b.discs,
-			PartitionName:  b.discs[0].InstalledName,
+			Platform:         model.PlatformPS1,
+			Title:            title,
+			GameID:           b.discs[0].GameID,
+			SizeBytes:        b.size,
+			InstallSizeBytes: b.size,
+			StorageBackend:   model.BackendPOPS,
+			Installed:        true,
+			Discs:            b.discs,
+			PartitionName:    b.discs[0].InstalledName,
 		})
 	}
 	return out, nil

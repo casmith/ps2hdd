@@ -157,6 +157,15 @@ func lbaToMSF(lba int) MSF {
 	return MSF{M: lba / 4500, S: (lba % 4500) / 75, F: lba % 75}
 }
 
+// VCDSize reports the size of the VCD a rip of this shape converts into: the
+// POPS header, every track file, and any gap the conversion materialises.
+func VCDSize(sourceBytes int64, gapSectors int) int64 {
+	if sourceBytes <= 0 {
+		return 0
+	}
+	return HeaderSize + sourceBytes + int64(gapSectors)*SectorSize
+}
+
 // PadOffset reports the byte offset in the BIN at which a CDRWIN pregap must
 // be inserted, and whether one is needed at all.
 //

@@ -152,8 +152,12 @@ type PS1Members struct {
 	// the first of a multi-track set.
 	Data external.ArchiveEntry
 	// DataCount is how many data files the archive holds. More than one is a
-	// split dump, which POPS cannot represent.
+	// split dump, which the converter joins as it goes.
 	DataCount int
+	// TotalBytes is every data file together, which is what the rip weighs.
+	// Data.SizeBytes alone is only track 1, and for a split dump that can be a
+	// small fraction of the disc.
+	TotalBytes int64
 }
 
 // FindPS1Members picks the cuesheet and data track out of an archive listing.
@@ -192,6 +196,9 @@ func FindPS1Members(entries []external.ArchiveEntry) (PS1Members, error) {
 	sort.Slice(data, func(i, j int) bool { return data[i].Name < data[j].Name })
 	m.Data = data[0]
 	m.DataCount = len(data)
+	for _, e := range data {
+		m.TotalBytes += e.SizeBytes
+	}
 	return m, nil
 }
 
@@ -240,7 +247,7 @@ func InspectArchivedPS1(ctx context.Context, a external.Archive, archivePath str
 	if err != nil {
 		return model.Game{}, err
 	}
-	d, err := ps1.InspectReader(cueText, m.Data.Name, bytes.NewReader(head), m.Data.SizeBytes)
+	d, err := ps1.InspectReader(cueText, m.Data.Name, bytes.NewReader(head), m.Data.SizeBytes, m.TotalBytes)
 	if err != nil {
 		return model.Game{}, err
 	}
@@ -252,19 +259,21 @@ func InspectArchivedPS1(ctx context.Context, a external.Archive, archivePath str
 		member = m.Data.Name
 	}
 	g := model.Game{
-		Platform:      model.PlatformPS1,
-		Title:         d.Title,
-		GameID:        d.GameID,
-		SizeBytes:     d.SizeBytes,
-		SourcePath:    archivePath,
-		ArchiveMember: member,
+		Platform:         model.PlatformPS1,
+		Title:            d.Title,
+		GameID:           d.GameID,
+		SizeBytes:        d.SizeBytes,
+		InstallSizeBytes: d.VCDBytes,
+		SourcePath:       archivePath,
+		ArchiveMember:    member,
 		Discs: []model.Disc{{
-			Number:        d.DiscNumber,
-			GameID:        d.GameID,
-			Title:         d.Title,
-			SourcePath:    archivePath,
-			ArchiveMember: member,
-			SizeBytes:     d.SizeBytes,
+			Number:           d.DiscNumber,
+			GameID:           d.GameID,
+			Title:            d.Title,
+			SourcePath:       archivePath,
+			ArchiveMember:    member,
+			SizeBytes:        d.SizeBytes,
+			InstallSizeBytes: d.VCDBytes,
 		}},
 	}
 	return g, nil

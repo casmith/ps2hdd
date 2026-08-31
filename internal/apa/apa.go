@@ -113,6 +113,11 @@ type Slice struct {
 	TotalChunks uint32
 	UsedChunks  uint32
 	FreeChunks  uint32
+	// ChunkMap marks which of the slice's 128 MiB chunks are occupied. It is
+	// what makes an allocation predictable rather than estimated: how much a
+	// title costs depends on where the free chunks are, not only how many
+	// there are. See AllocationFor.
+	ChunkMap []bool
 }
 
 // TOC is the full partition table of a device.
@@ -358,12 +363,15 @@ func setupStatistics(s *Slice) {
 	s.TotalChunks = s.SizeMB / ChunkMB
 	s.FreeChunks = s.TotalChunks
 	s.UsedChunks = 0
-	occupied := make(map[uint32]bool, s.TotalChunks)
+	occupied := make([]bool, s.TotalChunks)
 	mark := func(start, length uint32) {
 		first := start / chunkSectors
 		n := length / chunkSectors
 		for i := uint32(0); i < n; i++ {
 			c := first + i
+			if c >= uint32(len(occupied)) {
+				continue
+			}
 			if !occupied[c] {
 				occupied[c] = true
 				s.UsedChunks++
@@ -376,6 +384,7 @@ func setupStatistics(s *Slice) {
 	for _, p := range s.Partitions {
 		mark(p.Start, p.Length)
 	}
+	s.ChunkMap = occupied
 }
 
 // readFull reads exactly len(buf) bytes at off.

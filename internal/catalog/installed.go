@@ -64,20 +64,22 @@ func (r InstalledReader) PS2Games(ctx context.Context) ([]model.Game, error) {
 			title = id
 		}
 		games = append(games, model.Game{
-			Platform:       model.PlatformPS2,
-			Title:          title,
-			GameID:         id,
-			SizeBytes:      g.SizeBytes(),
-			StorageBackend: model.BackendHDL,
-			Media:          media,
-			Installed:      true,
-			PartitionName:  g.PartitionName,
+			Platform:         model.PlatformPS2,
+			Title:            title,
+			GameID:           id,
+			SizeBytes:        g.SizeBytes(),
+			InstallSizeBytes: g.SizeBytes(),
+			StorageBackend:   model.BackendHDL,
+			Media:            media,
+			Installed:        true,
+			PartitionName:    g.PartitionName,
 			Discs: []model.Disc{{
-				Number:        1,
-				GameID:        id,
-				Title:         title,
-				InstalledName: g.PartitionName,
-				SizeBytes:     g.SizeBytes(),
+				Number:           1,
+				GameID:           id,
+				Title:            title,
+				InstalledName:    g.PartitionName,
+				SizeBytes:        g.SizeBytes(),
+				InstallSizeBytes: g.SizeBytes(),
 			}},
 		})
 	}

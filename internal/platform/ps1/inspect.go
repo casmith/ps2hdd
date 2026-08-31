@@ -21,11 +21,17 @@ type Disc struct {
 	// bare image.
 	CuePath string
 	// BinPath is the raw disc image.
-	BinPath   string
-	GameID    string
-	Title     string
-	VolumeID  string
+	BinPath  string
+	GameID   string
+	Title    string
+	VolumeID string
+	// SizeBytes is the whole rip: every track file, not just the one the
+	// first FILE line names.
 	SizeBytes int64
+	// VCDBytes is what the rip becomes once converted -- the POPS header, the
+	// tracks and any materialised pregap. It is worked out here because this
+	// is where the cuesheet is in hand.
+	VCDBytes int64
 	// AudioTracks is the number of CD-DA tracks, which is what makes a rip
 	// worth keeping as BIN/CUE rather than a bare image.
 	AudioTracks int
@@ -65,6 +71,7 @@ func Inspect(path string) (Disc, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	binPath := path
 
+	var cue *Cue
 	if ext == ".cue" {
 		c, err := ParseCueFile(path)
 		if err != nil {
@@ -76,6 +83,7 @@ func Inspect(path string) (Disc, error) {
 		d.CuePath = path
 		d.AudioTracks = c.AudioTracks()
 		binPath = c.BinPath
+		cue = &c
 	}
 	d.BinPath = binPath
 
@@ -88,7 +96,17 @@ func Inspect(path string) (Disc, error) {
 	if err != nil {
 		return d, err
 	}
-	return identify(d, f, fi.Size(), path, false)
+	// The data track's size is what the ISO reader must be given; the whole
+	// rip's is what the install will cost. For a single-file sheet they are
+	// the same, and for a split one they are not.
+	total, gaps := fi.Size(), 0
+	if cue != nil {
+		if n, err := cue.SourceBytes(); err == nil {
+			total = n
+		}
+		gaps = cue.GapSectors()
+	}
+	return identify(d, f, fi.Size(), total, gaps, path, false)
 }
 
 // InspectReader identifies a disc whose data is not on the filesystem.
@@ -98,11 +116,13 @@ func Inspect(path string) (Disc, error) {
 // That is enough: the volume descriptor and SYSTEM.CNF both sit at the front
 // of a PS1 disc.
 //
-// cueText may be empty for a rip with no cuesheet; size is the data track's
-// full size, which the caller knows from the archive listing even though r
-// covers only its beginning.
-func InspectReader(cueText, name string, r io.ReaderAt, size int64) (Disc, error) {
+// cueText may be empty for a rip with no cuesheet. dataSize is the data
+// track's full size, which the caller knows from the archive listing even
+// though r covers only its beginning, and totalSize is every track in the rip.
+// Passing 0 for totalSize means "the same as dataSize".
+func InspectReader(cueText, name string, r io.ReaderAt, dataSize, totalSize int64) (Disc, error) {
 	d := Disc{}
+	gaps := 0
 	if strings.TrimSpace(cueText) != "" {
 		c, err := ParseCue(strings.NewReader(cueText))
 		if err != nil {
@@ -112,22 +132,28 @@ func InspectReader(cueText, name string, r io.ReaderAt, size int64) (Disc, error
 			return d, fmt.Errorf("%s: %w", name, err)
 		}
 		d.AudioTracks = c.AudioTracks()
+		gaps = c.GapSectors()
 	}
-	return identify(d, r, size, name, true)
+	if totalSize <= 0 {
+		totalSize = dataSize
+	}
+	return identify(d, r, dataSize, totalSize, gaps, name, true)
 }
 
-// identify fills in the fields that come from the data track itself.
-//
 // partial says r holds only the beginning of the track, which is what a rip
 // inside an archive gives: enough for the volume descriptor and the root
 // directory, not necessarily enough for SYSTEM.CNF, whose contents can sit far
 // into the disc. On a real library that is 252 discs in 2,100 -- CloneCD sets
 // especially -- so the root directory is the fallback. It always holds the
 // boot file, named for the serial.
-func identify(d Disc, r io.ReaderAt, size int64, name string, partial bool) (Disc, error) {
-	d.SizeBytes = size
+//
+// dataSize is the data track alone, which is what the ISO reader must be given;
+// totalSize is every track, which is what the title weighs.
+func identify(d Disc, r io.ReaderAt, dataSize, totalSize int64, gapSectors int, name string, partial bool) (Disc, error) {
+	d.SizeBytes = totalSize
+	d.VCDBytes = VCDSize(totalSize, gapSectors)
 
-	vol, err := openPS1Volume(r, size)
+	vol, err := openPS1Volume(r, dataSize)
 	if err != nil {
 		return d, fmt.Errorf("%s: %w: %v", filepath.Base(name), ErrNotPS1, err)
 	}
