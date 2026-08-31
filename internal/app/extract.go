@@ -3,9 +3,11 @@ package app
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/external"
@@ -229,4 +231,98 @@ func (s *Services) extractPS1Source(ctx context.Context, g model.Game, opts Inst
 	}
 	log.Info("extracted archived PS1 source", "archive", g.SourcePath, "into", dir)
 	return discs, cleanup, nil
+}
+
+// Scratch left behind.
+//
+// Every extraction and conversion removes its own directory on the way out,
+// including after a failed install. A deferred cleanup does not run when the
+// process is killed, though -- an OOM kill, a power cut, a Ctrl-\ -- and a bulk
+// run that dies partway leaves gigabytes behind in a cache directory nobody
+// thinks to look in.
+//
+// Reaping is by age rather than by tracking what is live. A directory in use
+// is minutes old; nothing legitimate is a day old, and installs do not run
+// concurrently -- the drive is locked for one at a time. That makes the rule
+// safe without any bookkeeping to go stale.
+
+// staleScratchAge is how old a leftover must be before it is assumed abandoned.
+const staleScratchAge = 24 * time.Hour
+
+// scratchPrefixes are the directory names the extract and convert paths make.
+var scratchPrefixes = []string{"extract-", "ps1-", "vcd-", "launcher-"}
+
+// StaleScratch reports the abandoned scratch directories and their total size.
+func (s *Services) StaleScratch() (dirs []string, bytes int64, err error) {
+	root, err := s.ScratchRoot()
+	if err != nil {
+		return nil, 0, err
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		// No scratch directory is no leftovers, not a failure to look.
+		if os.IsNotExist(err) {
+			return nil, 0, nil
+		}
+		return nil, 0, err
+	}
+	cutoff := time.Now().Add(-staleScratchAge)
+	for _, e := range entries {
+		if !e.IsDir() || !isScratchDir(e.Name()) {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || info.ModTime().After(cutoff) {
+			continue
+		}
+		dir := filepath.Join(root, e.Name())
+		dirs = append(dirs, dir)
+		bytes += dirSize(dir)
+	}
+	return dirs, bytes, nil
+}
+
+// ReapStaleScratch removes abandoned scratch directories and reports what it
+// freed. It is called before an install rather than on a timer, because that
+// is the moment the space is about to be needed.
+func (s *Services) ReapStaleScratch(ctx context.Context) (int, int64) {
+	dirs, bytes, err := s.StaleScratch()
+	if err != nil || len(dirs) == 0 {
+		return 0, 0
+	}
+	n := 0
+	for _, d := range dirs {
+		if err := os.RemoveAll(d); err != nil {
+			logging.ContextLogger(ctx).Warn("could not remove abandoned scratch", "dir", d, "err", err)
+			continue
+		}
+		n++
+	}
+	logging.ContextLogger(ctx).Info("removed abandoned scratch directories", "count", n, "bytes", bytes)
+	return n, bytes
+}
+
+func isScratchDir(name string) bool {
+	for _, p := range scratchPrefixes {
+		if strings.HasPrefix(name, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// dirSize totals a directory tree, ignoring what it cannot read: this figure
+// is reported to a human, not acted on.
+func dirSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if info, err := d.Info(); err == nil {
+			total += info.Size()
+		}
+		return nil
+	})
+	return total
 }

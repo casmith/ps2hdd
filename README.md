@@ -421,6 +421,19 @@ checked for free space first, and is deleted afterwards whatever the outcome.
 
 Needs `7z` on PATH; `ps2hdd doctor` says whether it is there.
 
+**The scratch copy is removed after every install**, successful or not: it
+duplicates data that still exists in the archive, and gigabytes of it. The same
+directory holds PS1 conversion staging, so a VCD is built on disk rather than
+in `/tmp`, which is tmpfs on most distributions and would otherwise put a whole
+disc in RAM.
+
+A deferred cleanup does not run when the process is killed, though — an OOM
+kill, a power cut — so a run that dies partway leaves its scratch behind. The
+next install reclaims anything more than a day old, and `ps2hdd doctor` reports
+it in the meantime. Age is the test rather than bookkeeping: a directory in use
+is minutes old, installs never run concurrently, and nothing about that can go
+stale.
+
 Installing a PS1 game converts the rip to POPS's VCD format — built in, and
 verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies
 it into `__.POPS`, then writes the POPStarter launcher that makes it appear in

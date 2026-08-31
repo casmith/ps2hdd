@@ -197,7 +197,14 @@ func (s *Services) RepairPS1Launchers(ctx context.Context) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	staging, err := os.MkdirTemp("", "ps2hdd-launcher-")
+	root, err := s.ScratchRoot()
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return nil, err
+	}
+	staging, err := os.MkdirTemp(root, "launcher-")
 	if err != nil {
 		return nil, err
 	}
