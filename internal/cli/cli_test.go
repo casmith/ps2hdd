@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -251,5 +252,95 @@ func TestInfoOnAPath(t *testing.T) {
 	}
 	if !strings.Contains(out, "SCUS_973.28") {
 		t.Errorf("info did not identify the image:\n%s", out)
+	}
+}
+
+// The summary under a filtered listing has to describe what was shown. It used
+// to count the whole catalog, so `list --installed` on a large library ended
+// with "34 shown; 34 installed, 1926 available" -- naming the hundreds of
+// titles the filter had just excluded, which reads as the filter doing nothing.
+func TestListSummaryCountsOnlyWhatIsShown(t *testing.T) {
+	all, _, err := run(t, "--demo", "list", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(all, "installed") || !strings.Contains(all, "available") {
+		t.Fatalf("unfiltered summary should mention both:\n%s", all)
+	}
+
+	onlyInstalled, _, err := run(t, "--demo", "list", "--installed", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := summaryLine(t, onlyInstalled)
+	if strings.Contains(summary, "available") {
+		t.Errorf("`list --installed` counts titles it excluded: %q", summary)
+	}
+	if !strings.Contains(summary, "installed") {
+		t.Errorf("summary = %q, want an installed count", summary)
+	}
+
+	onlyAvailable, _, err := run(t, "--demo", "list", "--available", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := summaryLine(t, onlyAvailable); strings.Contains(s, "installed") {
+		t.Errorf("`list --available` counts installed titles: %q", s)
+	}
+}
+
+func summaryLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "shown") {
+			return strings.TrimSpace(line)
+		}
+	}
+	t.Fatalf("no summary line in:\n%s", out)
+	return ""
+}
+
+// A listing of what is on the HDD should not end with a wall of files that
+// failed to identify in a source directory somewhere else. On a real library
+// that is over a hundred lines of it, under a question about the drive.
+func TestListInstalledDoesNotReportSourceProblems(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", filepath.Join(root, "cache"))
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(root, "config"))
+	t.Setenv("XDG_STATE_HOME", filepath.Join(root, "state"))
+	t.Setenv("XDG_RUNTIME_DIR", "")
+
+	// One run to build the demo environment, then junk dropped into its source
+	// directory so there is something to fail to identify. Without this the
+	// test asserts the absence of a section that would be absent anyway.
+	if _, _, err := runIn(t, "--demo", "list", "--no-artwork"); err != nil {
+		t.Fatal(err)
+	}
+	srcDir := filepath.Join(root, "cache", "ps2hdd", "demo", "sources", "ps2")
+	for i := 0; i < 15; i++ {
+		p := filepath.Join(srcDir, fmt.Sprintf("notagame%02d.iso", i))
+		if err := os.WriteFile(p, make([]byte, 40000), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	unfiltered, _, err := runIn(t, "--demo", "list", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(unfiltered, "Unidentified source files (15)") {
+		t.Fatalf("the unfiltered listing should report them:\n%s", unfiltered)
+	}
+	// Capped, with the true total in the heading and the rest deferred.
+	if !strings.Contains(unfiltered, "and 5 more") {
+		t.Errorf("the list was not capped:\n%s", unfiltered)
+	}
+
+	onlyInstalled, _, err := runIn(t, "--demo", "list", "--installed", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(onlyInstalled, "Unidentified source files") {
+		t.Errorf("`list --installed` reported source problems:\n%s", onlyInstalled)
 	}
 }
