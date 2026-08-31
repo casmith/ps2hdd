@@ -3,25 +3,38 @@ name: Release
 # Builds the binaries for a tag and attaches them to its release.
 #
 # Normally release-please calls this after merging a release PR, having already
-# chosen the version from the conventional commits and created both the tag and
-# the release. A hand-pushed v* tag still works and creates the release itself,
-# which is what makes an out-of-band or emergency release possible without
-# waiting on a bot.
+# chosen the version and created the release. A hand-pushed v* tag still works
+# and creates the release itself, which is what makes an out-of-band release
+# possible without waiting on a bot.
+#
+# The version and the thing to check out are separate inputs, and have to be.
+# release-please publishes as a draft so that no release is visible without its
+# binaries -- and a draft release has no git tag, because GitHub creates the tag
+# only when the release is published. Checking out the version string therefore
+# finds nothing. What does exist is the commit the release points at, so that is
+# what gets built.
 on:
   push:
     tags: ['v*']
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing tag to build a release from'
+        description: 'Version to build and attach, e.g. v1.2.3'
         required: true
         type: string
-  # Called by release-please, which has already created the tag and the release
-  # and needs the binaries attached to it.
+      ref:
+        description: 'Commit to build from. Needed while the release is a draft, since its tag does not exist yet.'
+        required: false
+        type: string
+  # Called by release-please, which has created the release -- as a draft, so
+  # its tag does not exist -- and needs the binaries attached to it.
   workflow_call:
     inputs:
       tag:
         required: true
+        type: string
+      ref:
+        required: false
         type: string
 
 permissions:
@@ -34,9 +47,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          ref: ${{ inputs.tag || github.ref }}
-          # The full history, or `git describe` cannot see the tag it is
-          # standing on and every binary reports a bare commit hash.
+          # The commit when there is one, because a draft release's tag does
+          # not exist yet; the tag otherwise, for a hand-pushed one.
+          ref: ${{ inputs.ref || inputs.tag || github.ref }}
+          # Full history: nothing needs it today, but a shallow checkout is a
+          # trap for anything that later reaches for git describe.
           fetch-depth: 0
 
       - uses: actions/setup-go@v7

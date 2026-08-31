@@ -20,6 +20,7 @@ jobs:
     outputs:
       released: ${{ steps.release.outputs.release_created }}
       tag: ${{ steps.release.outputs.tag_name }}
+      sha: ${{ steps.release.outputs.sha }}
     steps:
       - uses: googleapis/release-please-action@v5
         id: release
@@ -39,3 +40,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag }}
+      # The release is a draft, so its tag does not exist yet. The commit it
+      # was tagged at does.
+      ref: ${{ needs.release-please.outputs.sha }}
