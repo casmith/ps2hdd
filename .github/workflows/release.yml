@@ -1,8 +1,12 @@
 name: Release
 
-# Tags starting with v are the trigger. Everything after the tag is automated;
-# choosing the number stays a human decision, because it is a claim about
-# compatibility that no commit-message convention can make on its own.
+# Builds the binaries for a tag and attaches them to its release.
+#
+# Normally release-please calls this after merging a release PR, having already
+# chosen the version from the conventional commits and created both the tag and
+# the release. A hand-pushed v* tag still works and creates the release itself,
+# which is what makes an out-of-band or emergency release possible without
+# waiting on a bot.
 on:
   push:
     tags: ['v*']
@@ -11,6 +15,14 @@ on:
       tag:
         description: 'Existing tag to build a release from'
         required: true
+        type: string
+  # Called by release-please, which has already created the tag and the release
+  # and needs the binaries attached to it.
+  workflow_call:
+    inputs:
+      tag:
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -68,11 +80,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           version="${{ inputs.tag || github.ref_name }}"
-          gh release create "$version" \
-            --title "$version" \
-            --generate-notes \
-            --notes-file - \
-            ps2hdd-linux-amd64 ps2hdd-linux-arm64 SHA256SUMS <<NOTES
+
+          install_notes=$(cat <<NOTES
           ## Install
 
           \`\`\`sh
@@ -91,3 +100,29 @@ jobs:
           \`hdl_dump\`, and artwork or PS1 support needs \`pfsfuse\`; run
           \`ps2hdd doctor\` and it prints the commands for your distribution.
           NOTES
+          )
+
+          # release-please creates the release itself, with the changelog as
+          # its body, and then calls this workflow to hang the binaries off it.
+          # A hand-pushed tag arrives here with no release at all. Both are
+          # normal, so which one happened is decided by looking rather than by
+          # assuming, and the install instructions are put in front of whatever
+          # notes already exist rather than replacing them.
+          if gh release view "$version" >/dev/null 2>&1; then
+            echo "release $version exists; attaching binaries"
+            gh release upload "$version" \
+              ps2hdd-linux-amd64 ps2hdd-linux-arm64 SHA256SUMS --clobber
+            body=$(gh release view "$version" --json body --jq .body)
+            case "$body" in
+              *"## Install"*) echo "install notes already present" ;;
+              *) printf '%s\n\n%s\n' "$install_notes" "$body" |
+                   gh release edit "$version" --notes-file - ;;
+            esac
+          else
+            echo "no release for $version; creating one"
+            gh release create "$version" \
+              --title "$version" \
+              --generate-notes \
+              --notes-file - \
+              ps2hdd-linux-amd64 ps2hdd-linux-arm64 SHA256SUMS <<<"$install_notes"
+          fi

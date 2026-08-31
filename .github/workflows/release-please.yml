@@ -1,0 +1,41 @@
+name: Release Please
+
+# Every push to main is considered. release-please reads the conventional
+# commits since the last release, works out the next version, and keeps a pull
+# request open with the changelog it would publish. Merging that PR is the
+# release: it tags, and the tag is what everything downstream keys off.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: propose or publish
+    runs-on: ubuntu-latest
+    outputs:
+      released: ${{ steps.release.outputs.release_created }}
+      tag: ${{ steps.release.outputs.tag_name }}
+    steps:
+      - uses: googleapis/release-please-action@v5
+        id: release
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # A tag pushed with GITHUB_TOKEN does not trigger workflows, by design: it is
+  # what stops a workflow from setting itself off forever. So the release build
+  # cannot wait for the tag event and is called directly instead.
+  build:
+    name: attach binaries
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/release.yml
+    with:
+      tag: ${{ needs.release-please.outputs.tag }}
