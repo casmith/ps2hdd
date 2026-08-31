@@ -15,6 +15,10 @@ type QueueState string
 const (
 	QueueWaiting    QueueState = "waiting"
 	QueueInspecting QueueState = "inspecting"
+	// QueueExtracting is unpacking an archived source. It is its own state
+	// because it is its own wait -- a minute of decompression reported as
+	// "installing" is indistinguishable from a stall.
+	QueueExtracting QueueState = "extracting"
 	QueueConverting QueueState = "converting"
 	QueueInstalling QueueState = "installing"
 	QueueVerifying  QueueState = "verifying"
@@ -36,6 +40,8 @@ func stateForStage(st Stage) QueueState {
 		return QueueInspecting
 	case StageValidating:
 		return QueueInspecting
+	case StageExtracting:
+		return QueueExtracting
 	case StageConverting:
 		return QueueConverting
 	case StageInstalling, StageRemoving:
@@ -83,6 +89,8 @@ type Queue struct {
 	running  bool
 	cancel   context.CancelFunc
 	onUpdate func(QueueItem)
+	// prefetch unpacks ahead of the worker, for as long as the worker runs.
+	prefetch *Prefetcher
 	// opts is the install configuration applied to every queued item.
 	opts InstallOptions
 }
@@ -111,6 +119,34 @@ func (q *Queue) Add(games ...model.Game) []QueueItem {
 		q.nextID++
 		q.items = append(q.items, it)
 		out = append(out, *it)
+	}
+	// A pass already under way has to hear about these, or anything queued
+	// behind the current work stops being unpacked ahead.
+	q.prefetch.Add(games...)
+	return out
+}
+
+// installOpts is the queue's install configuration with the running pass's
+// prefetcher attached. Forgetting to attach it is invisible -- every install
+// still works, just without ever overlapping anything -- so it is a step of
+// its own rather than two lines inside the worker.
+func (q *Queue) installOpts() InstallOptions {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	o := q.opts
+	o.Prefetch = q.prefetch
+	return o
+}
+
+// waitingGames lists what the worker has still to do, in order.
+func (q *Queue) waitingGames() []model.Game {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	var out []model.Game
+	for _, it := range q.items {
+		if it.State == QueueWaiting {
+			out = append(out, it.Game)
+		}
 	}
 	return out
 }
@@ -214,11 +250,23 @@ func (q *Queue) Clear() {
 }
 
 func (q *Queue) run(ctx context.Context) {
+	// Unpacking the next title while the current one is written, the same as
+	// the command line does. It lives for one pass of the worker: whatever it
+	// has unpacked and not handed over is released when the pass ends, so a
+	// cancelled run leaves nothing behind.
+	pre := q.svc.StartPrefetch(ctx, q.svc.Config.Install.Prefetch, q.opts)
+	q.mu.Lock()
+	q.prefetch = pre
+	q.mu.Unlock()
+	pre.Add(q.waitingGames()...)
+
 	defer func() {
 		q.mu.Lock()
 		q.running = false
 		q.cancel = nil
+		q.prefetch = nil
 		q.mu.Unlock()
+		pre.Stop()
 	}()
 
 	for {
@@ -273,7 +321,7 @@ func (q *Queue) process(ctx context.Context, it *QueueItem) {
 		i.Progress = -1
 	})
 
-	opts := q.opts
+	opts := q.installOpts()
 	opts.OnProgress = func(p Progress) {
 		// The queue owns the terminal state, not the operation's progress
 		// reporting. Install emits a final StageComplete, and letting that
@@ -318,6 +366,8 @@ func stageText(p Progress) string {
 		return "Checking the HDD"
 	case StageInspecting:
 		return "Inspecting"
+	case StageExtracting:
+		return "Unpacking"
 	case StageConverting:
 		return "Converting to VCD"
 	case StageInstalling:

@@ -77,8 +77,9 @@ func runBatch(env *Env, ctx context.Context, plan app.InstallPlan, opts app.Inst
 	// one is being written, which is otherwise dead time on both the drive and
 	// the CPU. Stop releases anything unpacked but never reached, including
 	// after an interrupt.
-	pre := env.Svc.StartPrefetch(ctx, todo, env.Config.Install.Prefetch, opts)
+	pre := env.Svc.StartPrefetch(ctx, env.Config.Install.Prefetch, opts)
 	defer pre.Stop()
+	pre.Add(todo...)
 	opts.Prefetch = pre
 
 	for i, g := range todo {
