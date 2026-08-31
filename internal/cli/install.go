@@ -331,6 +331,8 @@ func stageLabel(s app.Stage) string {
 		return "checking the HDD"
 	case app.StageInspecting:
 		return "inspecting"
+	case app.StageExtracting:
+		return "unpacking"
 	case app.StageConverting:
 		return "converting to VCD"
 	case app.StageInstalling:
