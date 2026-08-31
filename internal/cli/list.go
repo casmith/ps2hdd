@@ -11,6 +11,14 @@ import (
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
+// maxListedProblems caps the unidentified-files section.
+//
+// A large library produces a lot of them -- 135 in one real PS1 collection,
+// most of them the same handful of causes -- and printing every one buries the
+// listing the user actually asked for. The count in the heading is always the
+// true total, so nothing is hidden, only deferred to --json.
+const maxListedProblems = 10
+
 func newListCommand(env *Env) *cobra.Command {
 	var (
 		onlyPS1    bool
@@ -89,10 +97,22 @@ Only the HDD decides that.`,
 				}
 				env.printf("\n%s\n", strings.Join(parts, "; "))
 			}
-			if len(c.Problems) > 0 {
+			// Source problems belong to a listing about sources. Under
+			// --installed the question was what is on the HDD, and a wall of
+			// files that failed to identify in a directory somewhere else is
+			// not an answer to it -- on a real library that is over a hundred
+			// lines of it.
+			if len(c.Problems) > 0 && !installed {
 				section(env.Out, fmt.Sprintf("Unidentified source files (%d)", len(c.Problems)))
-				for _, p := range c.Problems {
+				shown := c.Problems
+				if len(shown) > maxListedProblems {
+					shown = shown[:maxListedProblems]
+				}
+				for _, p := range shown {
 					env.printf("  %s\n    %s\n", p.Path, dim(p.Reason))
+				}
+				if n := len(c.Problems) - len(shown); n > 0 {
+					env.printf("  %s\n", dim(fmt.Sprintf("… and %d more; --json lists them all", n)))
 				}
 			}
 			return nil
