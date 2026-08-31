@@ -341,12 +341,19 @@ ps2hdd install --from-list wanted.txt --dry-run
 ```
 # what I actually want
 Gran Turismo 4
-SCUS_974.72          # by serial, with a note
+SCUS_974.72                       # by serial, with a note
+Ace Combat 04 - Shattered Skies (USA).7z
 /mnt/roms/Ico (USA).7z
 ```
 
-One title, serial or image path per line; blank lines are skipped and `#`
-starts a comment, so the list can carry notes and live in version control.
+One title, serial, filename or image path per line; blank lines are skipped and
+`#` starts a comment, so the list can carry notes and live in version control.
+
+A **directory listing works as it stands** — `ls /mnt/roms/ps2 > wanted.txt` —
+which is the obvious way to build one. A bare filename matches no title (the
+extension is not part of one) and looks like no path (it names no directory),
+so it is matched against the file each entry was read from, with or without the
+extension.
 **Every line must resolve** — a typo that quietly dropped one game out of two
 hundred would be noticed months later by its absence — and unresolved lines are
 reported together, by line number, rather than one run at a time. A title
