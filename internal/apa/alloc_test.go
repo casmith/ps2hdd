@@ -181,3 +181,83 @@ func TestMaxAllocationAssumesNoMerging(t *testing.T) {
 		t.Error("a zero-byte image was charged space")
 	}
 }
+
+// A plan is not a stack of independent answers. Asking whether each of three
+// titles fits on the same empty drive says yes three times; asking where the
+// run stops needs the space claimed as it goes.
+func TestAllocatorConsumesSpaceAsItGoes(t *testing.T) {
+	toc := &TOC{Slices: []Slice{freeSlice(8)}} // 1 GiB
+	a := toc.NewAllocator()
+
+	// Three 300 MiB images: 384 MiB each once rounded, so two fit and the
+	// third does not.
+	for i, want := range []struct {
+		bytes int64
+		ok    bool
+	}{{384, true}, {384, true}, {0, false}} {
+		got, ok := a.Place(300 * mib)
+		if ok != want.ok {
+			t.Fatalf("title %d: fits = %v, want %v", i+1, ok, want.ok)
+		}
+		if ok && got != want.bytes*mib {
+			t.Errorf("title %d: allocated %d MiB, want %d", i+1, got/mib, want.bytes)
+		}
+	}
+	// Two of eight chunks are left, which is not enough for a third.
+	if got, want := a.FreeBytes(), int64(2*128)*mib; got != want {
+		t.Errorf("free = %d MiB, want %d", got/mib, want/mib)
+	}
+}
+
+// A refused placement must claim nothing, or one oversized title would eat the
+// space the rest of the plan was going to use.
+func TestAllocatorClaimsNothingWhenItRefuses(t *testing.T) {
+	toc := &TOC{Slices: []Slice{freeSlice(4)}} // 512 MiB
+	a := toc.NewAllocator()
+	before := a.FreeBytes()
+	if _, ok := a.Place(4000 * mib); ok {
+		t.Fatal("a 4 GiB image fit in 512 MiB")
+	}
+	if got := a.FreeBytes(); got != before {
+		t.Errorf("free went from %d to %d MiB on a refusal", before/mib, got/mib)
+	}
+	// And the space is still there for something that does fit.
+	if _, ok := a.Place(300 * mib); !ok {
+		t.Error("the refusal consumed the space anyway")
+	}
+}
+
+// The allocator works on a copy. A plan that quietly edited the table it read
+// would make the next question in the same session answer wrongly.
+func TestAllocatorDoesNotDisturbTheTable(t *testing.T) {
+	toc := &TOC{Slices: []Slice{freeSlice(8)}}
+	a := toc.NewAllocator()
+	for i := 0; i < 4; i++ {
+		a.Place(200 * mib)
+	}
+	if toc.Slices[0].FreeChunks != 8 {
+		t.Errorf("the source table lost chunks: free = %d, want 8", toc.Slices[0].FreeChunks)
+	}
+	for i, used := range toc.Slices[0].ChunkMap {
+		if used {
+			t.Fatalf("the source chunk map was written to at %d", i)
+		}
+	}
+}
+
+// Placement keeps charging real overhead as it goes, so a run of titles that
+// each sit just under a chunk boundary costs a chunk each more than their
+// sizes suggest.
+func TestAllocatorKeepsChargingOverhead(t *testing.T) {
+	toc := &TOC{Slices: []Slice{freeSlice(64)}}
+	a := toc.NewAllocator()
+	for i := 0; i < 3; i++ {
+		got, ok := a.Place(125 * mib)
+		if !ok {
+			t.Fatalf("title %d did not fit", i+1)
+		}
+		if got != 256*mib {
+			t.Errorf("title %d allocated %d MiB, want 256", i+1, got/mib)
+		}
+	}
+}

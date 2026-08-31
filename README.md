@@ -308,6 +308,31 @@ through `hdl_dump`: the reference implementation decides how APA space is laid
 out. ps2hdd confirms the result by reading the partition table back, because
 `pfsshell` is a shell and a failed `mkpart` still exits 0.
 
+### Planning a bulk install
+
+```sh
+ps2hdd install --all --dry-run          # everything not yet installed
+ps2hdd install --all --ps1 --dry-run    # just the PlayStation 1 library
+```
+
+This answers the question a stack of single dry runs cannot. Checking each
+title against the drive's current free space reports that all five hundred fit,
+because individually all five hundred do. `--all` consumes the space as it
+walks the list, so what it tells you is **where the run stops**.
+
+PS2 titles are placed by replaying hdl_dump's allocator against the drive's
+real chunk map, so partition overhead and fragmentation are part of the answer
+rather than an approximation of it. PS1 titles are VCDs inside `__.POPS`, an
+already-allocated partition, so they are counted against the room left in it —
+a different pool that runs out separately. The plan names both.
+
+Run it before you size `__.POPS`, since growing that partition afterwards needs
+a PS2-side tool. With no drive attached the sizes are still worth having; the
+verdict then reads `not measured` rather than inventing one.
+
+`--all` is planning only for now. Running a several-hundred-title write has
+questions about ordering, resuming and partial failure that are not settled.
+
 ### Compressed sources
 
 A PS2 library kept as `.7z`, `.zip` or `.rar` archives is read in place. One
