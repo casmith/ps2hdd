@@ -9,16 +9,32 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/catalog"
+	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
-// planAll renders what installing the whole source library would cost.
-func planAll(env *Env, ctx context.Context, opts app.PlanOptions) error {
+// buildPlan works out what a --all or --from-list run would cost. The same
+// plan is what a dry run prints and what a real run then installs, so the two
+// cannot disagree about which titles fit.
+func buildPlan(env *Env, ctx context.Context, listPath string, opts app.PlanOptions) (app.InstallPlan, error) {
+	if listPath != "" {
+		return planList(env, ctx, config.ExpandPath(listPath), opts)
+	}
 	plan, warnings, err := env.Svc.PlanInstallAll(ctx, opts)
 	if err != nil {
-		return err
+		return plan, err
 	}
-	return renderPlan(env, plan, warnings)
+	warn(env, warnings)
+	return plan, nil
+}
+
+func warn(env *Env, warnings []error) {
+	if env.JSON {
+		return
+	}
+	for _, w := range warnings {
+		env.printf("%s %s\n", amber("!"), w)
+	}
 }
 
 // planList renders what installing the titles named in a file would cost.
@@ -27,15 +43,17 @@ func planAll(env *Env, ctx context.Context, opts app.PlanOptions) error {
 // typo that quietly dropped one game out of two hundred would be found months
 // later by its absence -- so an unresolved line stops the plan and is reported
 // by line number, with the whole set of failures at once rather than the first.
-func planList(env *Env, ctx context.Context, path string, opts app.PlanOptions) error {
+func planList(env *Env, ctx context.Context, path string, opts app.PlanOptions) (app.InstallPlan, error) {
+	var plan app.InstallPlan
 	lines, err := readGameList(path)
 	if err != nil {
-		return err
+		return plan, err
 	}
 	c, warnings, err := env.Svc.Catalog(ctx)
 	if err != nil {
-		return err
+		return plan, err
 	}
+	warn(env, warnings)
 
 	var games []model.Game
 	var unresolved []string
@@ -61,16 +79,16 @@ func planList(env *Env, ctx context.Context, path string, opts app.PlanOptions) 
 		games = append(games, g)
 	}
 	if len(unresolved) > 0 {
-		return fmt.Errorf("%d entr(ies) in %s could not be resolved:\n  %s",
+		return plan, fmt.Errorf("%d entr(ies) in %s could not be resolved:\n  %s",
 			len(unresolved), path, strings.Join(unresolved, "\n  "))
 	}
 
-	plan, err := env.Svc.PlanInstall(ctx, games, opts)
+	plan, err = env.Svc.PlanInstall(ctx, games, opts)
 	if err != nil {
-		return err
+		return plan, err
 	}
 	plan.Skipped = skipped
-	return renderPlan(env, plan, warnings)
+	return plan, nil
 }
 
 // resolveListEntry turns one line into a title: a path if it names a file that
@@ -144,9 +162,7 @@ func renderPlan(env *Env, plan app.InstallPlan, warnings []error) error {
 	if env.JSON {
 		return env.emitJSON(plan)
 	}
-	for _, w := range warnings {
-		env.printf("%s %s\n", amber("!"), w)
-	}
+	warn(env, warnings)
 
 	total := plan.PS2.Count() + plan.PS1.Count()
 	if total == 0 {

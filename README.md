@@ -365,9 +365,30 @@ serial.
 **A directory of symbolic links is not an alternative.** The source scanner
 reads regular files only, so links are skipped without comment.
 
-`--all` and `--from-list` are planning only for now. Running a several-hundred-
-title write has questions about ordering, resuming and partial failure that are
-not settled.
+### Running it
+
+Drop `--dry-run` and the same plan is installed:
+
+```sh
+ps2hdd install --all
+ps2hdd install --from-list wanted.txt --ps1
+```
+
+One confirmation for the run, not one per title — a batch that asked five
+hundred times would be answered by holding down a key, which is not consent.
+
+**A failure stops that title and nothing else.** Across several hundred titles
+one bad archive is close to certain, and aborting the run for it would throw
+away the hours already spent and every title after. Failures are collected,
+named at the end, and the command exits non-zero.
+
+Titles the plan said would not fit are **named rather than attempted**, so the
+run does what the plan promised instead of rediscovering it one refusal at a
+time.
+
+**There is no resume state.** Run the same command again and titles already on
+the drive are skipped — the same answer a saved position would have given, and
+one that cannot go stale.
 
 ### Compressed sources
 

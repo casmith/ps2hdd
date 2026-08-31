@@ -84,9 +84,6 @@ before="$(ls "$DEMO/partitions/pops/" | wc -l)"
 ps2hdd install --all --ps1 --dry-run > "$WORK/plan-ps1.txt"
 grep -q "PlayStation 2" "$WORK/plan-ps1.txt" && fail "--ps1 planned PS2 titles as well" || true
 [ "$(ls "$DEMO/partitions/pops/" | wc -l)" = "$before" ] || fail "a dry-run plan wrote to the HDD"
-# --all without --dry-run is refused: planning is the safe half.
-ps2hdd install --all > "$WORK/plan-refused.txt" 2>&1 && fail "--all ran a batch install" || true
-grep -q "dry-run" "$WORK/plan-refused.txt" || fail "the refusal does not say what to add"
 
 step "--from-list plans a chosen subset"
 cat > "$WORK/wanted.txt" <<'LIST'
@@ -120,6 +117,35 @@ printf 'Gran Turismo 4\nGrand Turismo 5\n' > "$WORK/typo.txt"
 ps2hdd install --from-list "$WORK/typo.txt" --dry-run > "$WORK/typo-out.txt" 2>&1 \
   && fail "a list with an unresolvable entry was planned anyway" || true
 grep -q "line 2" "$WORK/typo-out.txt" || fail "the failure does not name the line"
+
+step "--all installs what the plan said fits"
+# A batch of several hundred titles will meet a bad one; what matters is that
+# the run carries on past it. The synthetic environment cannot produce a
+# failing install on its own -- the fake hdl_dump never reads the source, so
+# corrupting one changes nothing -- so one is injected.
+ps2hdd install --all --ps2 > "$WORK/batch.txt" 2>&1 || true
+grep -q "Installed" "$WORK/batch.txt" || fail "the batch installed nothing: $(cat "$WORK/batch.txt")"
+ps2hdd list --ps2 --installed --no-artwork > "$WORK/after-batch.txt"
+grep -q "Gran Turismo 4" "$WORK/after-batch.txt" || fail "a planned title was not installed"
+
+step "a failing title does not stop the batch"
+ps2hdd remove "Gran Turismo 4"
+ps2hdd remove "Ridge Racer V"
+PS2HDD_DEMO_FAIL="Gran Turismo" ps2hdd install --all --ps2 > "$WORK/batch-fail.txt" 2>&1 \
+  && fail "a batch with a failing title reported success" || true
+grep -q "Gran Turismo 4" "$WORK/batch-fail.txt" || fail "the failing title was not named"
+ps2hdd list --ps2 --installed --no-artwork > "$WORK/after-fail.txt"
+grep -q "Ridge Racer V" "$WORK/after-fail.txt" \
+  || fail "the run stopped at the failure instead of carrying on"
+grep -q "Gran Turismo 4" "$WORK/after-fail.txt" \
+  && fail "the failing title was recorded as installed" || true
+
+step "re-running picks up what failed"
+# There is no resume state: a re-run skips what is already on the drive, which
+# is the same answer a saved position would give and cannot go stale.
+ps2hdd install --all --ps2 > "$WORK/batch-resume.txt" 2>&1
+grep -q "Installed  1 of 1" "$WORK/batch-resume.txt" \
+  || fail "the re-run did not install exactly the one that failed: $(cat "$WORK/batch-resume.txt")"
 
 step "install a multi-disc PS1 title"
 ps2hdd install \
