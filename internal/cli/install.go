@@ -67,8 +67,12 @@ __.POPS, which is a different pool and runs out separately. Narrow it with
   ps2hdd install --all --ps1 --dry-run    # just the PlayStation 1 library
 
 --from-list plans a chosen subset instead of everything. The file holds one
-title, serial or image path per line; blank lines are skipped and a '#' starts
-a comment, so the list can carry notes and live in version control. Every line
+title, serial, filename or image path per line, so a directory listing works as
+it stands:
+
+  ls /mnt/roms/ps2 > wanted.txt
+
+Blank lines are skipped and a '#' starts a comment, so the list can carry notes and live in version control. Every line
 must resolve -- a typo that quietly dropped one game out of two hundred would
 be noticed months later by its absence. A title containing a '#' is cut short
 by the comment rule; name that one by its serial. The accounting is the same as
