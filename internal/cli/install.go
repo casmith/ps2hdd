@@ -19,16 +19,20 @@ func newInstallCommand(env *Env) *cobra.Command {
 		noAssets       bool
 		fromSource     bool
 		wantWidescreen bool
+		all            bool
+		onlyPS1        bool
+		onlyPS2        bool
 	)
 
 	cmd := &cobra.Command{
-		Use:   "install <image> [image...]",
+		Use:   "install [image...]",
 		Short: "Install a PS1 or PS2 game onto the HDD",
 		Long: `Install a disc image from anywhere on the filesystem.
 
   ps2hdd install ~/Downloads/sotc.iso
   ps2hdd install "Metal Gear Solid (Disc 1).cue" "Metal Gear Solid (Disc 2).cue"
   ps2hdd install --from-source "God Hand"
+  ps2hdd install --all --dry-run
 
 Naming several images installs them as one multi-disc PlayStation 1 title.
 
@@ -48,11 +52,39 @@ corrects 3D geometry and field of view; HUDs, fonts, menus and 2D backgrounds
 stay stretched, and some games do not run with it. It is one line in a
 CHEATS.TXT, so it can be changed afterwards without reinstalling.
 
+--all plans the whole source library at once. Space is consumed as the plan
+walks the list, so it answers the question a stack of single dry runs cannot:
+not "does this title fit", which is yes for every title taken alone, but where
+the run stops. PS2 titles are placed by replaying hdl_dump's allocator against
+the drive's real chunk map; PS1 titles are counted against the room left inside
+__.POPS, which is a different pool and runs out separately. Narrow it with
+--ps1 or --ps2.
+
+  ps2hdd install --all --dry-run          # everything
+  ps2hdd install --all --ps1 --dry-run    # just the PlayStation 1 library
+
+--all currently requires --dry-run. Planning is the safe half; running a
+several-hundred-title write has questions about ordering, resuming and partial
+failure that are not settled yet.
+
 The HDD is revalidated immediately before the write, whatever an earlier
 command established.`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			if all {
+				if len(args) > 0 {
+					return fmt.Errorf("--all installs the whole source library; do not name images as well")
+				}
+				if !env.Svc.DryRun {
+					return fmt.Errorf("--all is planning only for now: add --dry-run")
+				}
+				return planAll(env, ctx, app.PlanOptions{PS2: onlyPS2, PS1: onlyPS1})
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("name a disc image, or use --all to plan the whole source library")
+			}
 
 			var games []model.Game
 			if fromSource {
@@ -127,6 +159,9 @@ command established.`,
 	f.BoolVar(&wantWidescreen, "widescreen", false,
 		"turn on POPStarter's widescreen hack for a PS1 title (overrides install.widescreen)")
 	f.BoolVar(&fromSource, "from-source", false, "treat the arguments as titles or IDs in the configured source directories")
+	f.BoolVar(&all, "all", false, "plan every source title that is not installed (needs --dry-run)")
+	f.BoolVar(&onlyPS1, "ps1", false, "with --all, plan only PlayStation 1 titles")
+	f.BoolVar(&onlyPS2, "ps2", false, "with --all, plan only PlayStation 2 titles")
 	return cmd
 }
 
