@@ -71,10 +71,9 @@ func LauncherELFName(vcdName string) string {
 //
 // It is the VCD's base name, which carries the serial and is therefore already
 // unique -- two releases of one title cannot collide -- and which makes the
-// correspondence with __.POPS visible to anyone browsing the disk.
-func LauncherDirName(vcdName string) string {
-	return strings.TrimSuffix(vcdName, filepath.Ext(vcdName))
-}
+// correspondence with __.POPS visible to anyone browsing the disk. See
+// GameDirName, which the __common/POPS support directory shares.
+func LauncherDirName(vcdName string) string { return GameDirName(vcdName) }
 
 // LauncherTitle renders the name OPL displays in its apps list.
 func LauncherTitle(title string) string {

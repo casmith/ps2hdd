@@ -343,7 +343,12 @@ Installing a PS1 game converts the rip to POPS's VCD format — built in, and
 verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies
 it into `__.POPS`, then writes the POPStarter launcher that makes it appear in
 OPL. Multi-disc titles get a `DISCS.TXT` so POPStarter can swap discs in game,
-and one launcher pointing at disc 1.
+a `VMCDIR.TXT` so every disc shares one memory card, and one launcher pointing
+at disc 1.
+
+`--widescreen` turns on POPStarter's GTE widescreen hack for a PS1 title. It
+corrects 3D geometry; HUDs, fonts and 2D art stay stretched, and some games do
+not run with it, so it is opt-in. `install.widescreen` sets the default.
 
 The rip must be `MODE2/2352`. 2048-byte MODE1 images are refused with an
 explanation rather than converted into something that would not boot.

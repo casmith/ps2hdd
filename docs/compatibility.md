@@ -303,14 +303,46 @@ ps2hdd keeps the 89-character VCD name, since shortening it would put ps2hdd's
 filenames at odds with every other tool, and warns instead. Those titles still
 launch from wLaunchELF.
 
-Multi-disc titles use a `_CD<n>` suffix and a `DISCS.TXT` listing the discs in
-order, in a directory named after the title's base VCD name:
+### The per-game support directory
+
+POPStarter reads per-game files from `__common/POPS/<vcd base name>/` — **not**
+from beside the VCD in `__.POPS`. Both partitions contain a POPS-shaped
+directory and only one of them is read, which is a mistake with no symptom
+until a disc change fails mid-game. Every disc gets its own directory.
 
 ```
 __.POPS/SLUS_005.94.Metal Gear Solid_CD1.VCD
 __.POPS/SLUS_007.76.Metal Gear Solid_CD2.VCD
-__.POPS/SLUS_005.94.Metal Gear Solid/DISCS.TXT
+__common/POPS/SLUS_005.94.Metal Gear Solid_CD1/DISCS.TXT
+__common/POPS/SLUS_007.76.Metal Gear Solid_CD2/DISCS.TXT
+__common/POPS/SLUS_007.76.Metal Gear Solid_CD2/VMCDIR.TXT
 ```
+
+| File | Where | What it does |
+|---|---|---|
+| `DISCS.TXT` | every disc | lists every VCD in order; the disc-swap menu is built from it |
+| `VMCDIR.TXT` | disc 2 onward | names disc 1's VCD, so all discs share one memory card |
+| `CHEATS.TXT` | any disc | raw cheat codes and POPStarter directives |
+
+`VMCDIR.TXT` is not optional for a multi-disc release. POPStarter gives each
+VCD its own virtual memory card, so without it a save made on disc 1 is
+invisible on disc 2 — a three-disc RPG that loses your save at the disc change
+is installed and unplayable. It holds the *VCD filename*, not the title.
+
+### Widescreen
+
+`ps2hdd install --widescreen` writes `$WIDESCREEN` into each disc's
+`CHEATS.TXT`, turning on POPStarter's GTE widescreen hack. `install.widescreen`
+in the config sets the default for every install.
+
+It is off unless asked for, and that is deliberate: the hack corrects 3D
+geometry and field of view but leaves HUDs, fonts, menus and 2D backgrounds
+stretched, and some games do not run with it at all. Since it is one line in a
+text file, it can be turned on or off afterwards without reinstalling.
+
+`CHEATS.TXT` belongs to the user. ps2hdd appends to one that already exists and
+never rewrites it, so hand-added cheat codes survive a reinstall; on removal it
+deletes the file only when the directive it wrote is the whole content.
 
 Filenames are capped at 89 characters, which is POPStarter's limit. ps2hdd
 truncates the title while preserving the serial prefix, the disc suffix and the

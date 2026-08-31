@@ -77,7 +77,7 @@ func TestInstallAndRemovePS2(t *testing.T) {
 	ctx := context.Background()
 
 	iso := filepath.Join(env.PS2Source(), "Shadow of the Colossus.iso")
-	g, err := svc.InspectSource(iso)
+	g, err := svc.InspectSource(ctx, iso)
 	if err != nil {
 		t.Fatalf("InspectSource: %v", err)
 	}
@@ -140,7 +140,7 @@ func TestInstallMultiDiscPS1(t *testing.T) {
 
 	dir := filepath.Join(env.PS1Source(), "Metal Gear Solid")
 	paths := []string{filepath.Join(dir, "Disc 1.cue"), filepath.Join(dir, "Disc 2.cue")}
-	g, err := svc.InspectSources(paths, "Metal Gear Solid")
+	g, err := svc.InspectSources(ctx, paths, "Metal Gear Solid")
 	if err != nil {
 		t.Fatalf("InspectSources: %v", err)
 	}
@@ -182,27 +182,59 @@ func TestInstallMultiDiscPS1(t *testing.T) {
 		}
 	}
 
-	// POPStarter's disc-swap file must list every disc in order.
+	// The per-game files live under __common/POPS, one directory per disc, and
+	// NOT beside the VCDs in __.POPS. Reading the wrong partition is a mistake
+	// with no symptom until a disc change fails mid-game, so the partition is
+	// part of what is asserted here.
 	m, err := svc.Mounts(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	err = m.With(ctx, "__.POPS", func(mp string) error {
-		body, err := os.ReadFile(filepath.Join(mp, "SLUS_005.94.Metal Gear Solid", "DISCS.TXT"))
-		if err != nil {
-			return err
-		}
-		lines := strings.Fields(strings.ReplaceAll(string(body), "\n", " "))
-		if len(lines) < 2 {
-			t.Errorf("DISCS.TXT = %q", body)
-		}
-		if !strings.Contains(string(body), "_CD1.VCD") || !strings.Contains(string(body), "_CD2.VCD") {
-			t.Errorf("DISCS.TXT does not list both discs: %q", body)
+	discDirs := []string{"SLUS_005.94.Metal Gear Solid_CD1", "SLUS_007.76.Metal Gear Solid_CD2"}
+	err = m.With(ctx, "__common", func(mp string) error {
+		for i, dir := range discDirs {
+			// DISCS.TXT goes in every disc's directory, listing all of them.
+			body, err := os.ReadFile(filepath.Join(mp, "POPS", dir, "DISCS.TXT"))
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(string(body), "_CD1.VCD") || !strings.Contains(string(body), "_CD2.VCD") {
+				t.Errorf("%s/DISCS.TXT does not list both discs: %q", dir, body)
+			}
+			// VMCDIR.TXT goes in the later discs only, naming disc 1's VCD, so
+			// that a save made on disc 1 is there after the swap.
+			vmc := filepath.Join(mp, "POPS", dir, "VMCDIR.TXT")
+			got, err := os.ReadFile(vmc)
+			if i == 0 {
+				if err == nil {
+					t.Errorf("disc 1 has a VMCDIR.TXT pointing at %q; it owns the card", got)
+				}
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			if !strings.Contains(string(got), "_CD1.VCD") {
+				t.Errorf("%s/VMCDIR.TXT = %q, want disc 1's VCD", dir, got)
+			}
 		}
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("checking DISCS.TXT: %v", err)
+		t.Fatalf("checking the POPStarter support files: %v", err)
+	}
+
+	// Nothing belongs in the support directory's old, wrong home.
+	err = m.With(ctx, "__.POPS", func(mp string) error {
+		for _, dir := range append(discDirs, "SLUS_005.94.Metal Gear Solid") {
+			if _, err := os.Stat(filepath.Join(mp, dir)); err == nil {
+				t.Errorf("%s was written into __.POPS, where POPStarter does not look", dir)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 
 	// Removing the title removes every disc.
@@ -227,7 +259,7 @@ func TestDryRunWritesNothing(t *testing.T) {
 	ctx := context.Background()
 
 	iso := filepath.Join(env.PS2Source(), "Shadow of the Colossus.iso")
-	g, err := svc.InspectSource(iso)
+	g, err := svc.InspectSource(ctx, iso)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -402,7 +434,7 @@ func TestQueueRunsInstallsInOrder(t *testing.T) {
 
 	var games []model.Game
 	for _, name := range []string{"Shadow of the Colossus.iso", "Gran Turismo 4.iso"} {
-		g, err := svc.InspectSource(filepath.Join(env.PS2Source(), name))
+		g, err := svc.InspectSource(ctx, filepath.Join(env.PS2Source(), name))
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/apa"
 	"github.com/casmith/ps2hdd/internal/asset"
+	"github.com/casmith/ps2hdd/internal/catalog"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/logging"
@@ -66,6 +67,10 @@ type InstallOptions struct {
 	Hidden bool
 	// SyncAssets fetches artwork after a successful install.
 	SyncAssets bool
+	// Widescreen turns on POPStarter's GTE widescreen hack for a PS1 title by
+	// writing $WIDESCREEN into its CHEATS.TXT. Off unless asked for: it does
+	// not correct HUDs or 2D art, and some games do not survive it.
+	Widescreen bool
 	// OnProgress receives stage and progress updates.
 	OnProgress ProgressFunc
 }
@@ -89,7 +94,14 @@ type InstallReport struct {
 
 // InspectSource identifies an arbitrary image path and returns the title it
 // describes, without touching the HDD.
-func (s *Services) InspectSource(path string) (model.Game, error) {
+//
+// An archive is read in place, exactly as a scan of a source directory reads
+// one. Naming a .7z on the command line and picking the same file out of the
+// library ought to reach the same code, and for a while they did not: the
+// scanner knew about archives and this did not, so `install game.7z` reported
+// a file that plainly is a game as "neither a PlayStation 2 nor a PlayStation
+// 1 disc image".
+func (s *Services) InspectSource(ctx context.Context, path string) (model.Game, error) {
 	abs, err := filepath.Abs(path)
 	if err != nil {
 		return model.Game{}, err
@@ -100,6 +112,9 @@ func (s *Services) InspectSource(path string) (model.Game, error) {
 	}
 	if fi.IsDir() {
 		return model.Game{}, fmt.Errorf("%s is a directory; name a disc image or a cuesheet", path)
+	}
+	if external.IsArchive(abs) {
+		return s.inspectArchivedSource(ctx, abs)
 	}
 
 	ext := strings.ToLower(filepath.Ext(abs))
@@ -125,14 +140,36 @@ func (s *Services) InspectSource(path string) (model.Game, error) {
 	return ps1.GroupExplicit([]ps1.Disc{d}, ""), nil
 }
 
+// inspectArchivedSource identifies the disc image inside an archive without
+// unpacking it, which is what the source scanner does with the same file.
+func (s *Services) inspectArchivedSource(ctx context.Context, abs string) (model.Game, error) {
+	if _, err := s.Runner.Look(external.SevenZipTool); err != nil {
+		return model.Game{}, fmt.Errorf("%s is an archive and 7z is not installed; run `ps2hdd doctor` for the command that installs it", filepath.Base(abs))
+	}
+	a := external.Archive{Runner: s.Runner}
+	// PS2 first, then PS1: one archive holds one disc image, and only the
+	// image's own boot record settles which console it is for.
+	g, _, err := catalog.InspectArchivedPS2(ctx, a, abs)
+	if err == nil {
+		return g, nil
+	}
+	ps2Err := err
+	g, err = catalog.InspectArchivedPS1(ctx, a, abs)
+	if err == nil {
+		return g, nil
+	}
+	return model.Game{}, fmt.Errorf("%s holds neither a PlayStation 2 nor a PlayStation 1 disc image: %w",
+		filepath.Base(abs), ps2Err)
+}
+
 // InspectSources identifies several paths as one logical title. Naming more
 // than one path only makes sense for a multi-disc PS1 release.
-func (s *Services) InspectSources(paths []string, title string) (model.Game, error) {
+func (s *Services) InspectSources(ctx context.Context, paths []string, title string) (model.Game, error) {
 	if len(paths) == 0 {
 		return model.Game{}, fmt.Errorf("no image given")
 	}
 	if len(paths) == 1 {
-		g, err := s.InspectSource(paths[0])
+		g, err := s.InspectSource(ctx, paths[0])
 		if err != nil {
 			return g, err
 		}
@@ -141,19 +178,47 @@ func (s *Services) InspectSources(paths []string, title string) (model.Game, err
 		}
 		return g, nil
 	}
+	// A multi-disc release with each disc in its own archive is grouped the
+	// same way as one with each disc loose, so every path goes through
+	// InspectSource and the discs are folded back together afterwards.
 	var discs []ps1.Disc
 	for _, p := range paths {
-		abs, err := filepath.Abs(p)
-		if err != nil {
-			return model.Game{}, err
-		}
-		d, err := ps1.Inspect(abs)
+		g, err := s.InspectSource(ctx, p)
 		if err != nil {
 			return model.Game{}, fmt.Errorf("%s: %w", filepath.Base(p), err)
 		}
-		discs = append(discs, d)
+		if g.Platform != model.PlatformPS1 {
+			return model.Game{}, fmt.Errorf("%s is a PlayStation 2 image; only PlayStation 1 releases have several discs", filepath.Base(p))
+		}
+		discs = append(discs, gameDiscs(g)...)
 	}
 	return ps1.GroupExplicit(discs, title), nil
+}
+
+// gameDiscs turns a one-disc Game back into the ps1.Disc grouping wants.
+func gameDiscs(g model.Game) []ps1.Disc {
+	out := make([]ps1.Disc, 0, len(g.Discs))
+	for _, d := range g.Discs {
+		disc := ps1.Disc{
+			GameID:        d.GameID,
+			Title:         d.Title,
+			SizeBytes:     d.SizeBytes,
+			VCDBytes:      d.InstallSizeBytes,
+			DiscNumber:    d.Number,
+			ArchivePath:   g.SourcePath,
+			ArchiveMember: d.ArchiveMember,
+		}
+		if d.ArchiveMember == "" {
+			disc.ArchivePath = ""
+			if filepath.Ext(strings.ToLower(d.SourcePath)) == ".cue" {
+				disc.CuePath = d.SourcePath
+			} else {
+				disc.BinPath = d.SourcePath
+			}
+		}
+		out = append(out, disc)
+	}
+	return out
 }
 
 // Install installs a title onto the HDD.
@@ -426,9 +491,25 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 		names[i] = ps1.VCDName(d.GameID, g.Title, d.Number, total)
 		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+names[i])
 	}
+	// Per-game files go in __common/POPS/<vcd base>/, one directory per disc.
+	// Not beside the VCD in __.POPS: both partitions have a POPS-shaped
+	// directory and only one of them is read.
+	support := func(i int, name string) string {
+		return ps1.CommonPartition + "/" + ps1.POPSDir + "/" + ps1.GameDirName(names[i]) + "/" + name
+	}
 	if total > 1 {
-		dir := ps1.DiscsDirName(g.Discs[0].GameID, g.Title)
-		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+dir+"/"+ps1.DiscsFile)
+		for i := range names {
+			rep.Files = append(rep.Files, support(i, ps1.DiscsFile))
+			// Disc 1 owns the memory card; the rest are pointed at it.
+			if i > 0 {
+				rep.Files = append(rep.Files, support(i, ps1.VMCDirFile))
+			}
+		}
+	}
+	if opts.Widescreen {
+		for i := range names {
+			rep.Files = append(rep.Files, support(i, ps1.CheatsFile))
+		}
 	}
 
 	// The VCD alone is not a playable game: OPL has no PS1 support at all, so
@@ -523,22 +604,18 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 			_ = os.Remove(tmp)
 		}
 
-		// POPStarter reads DISCS.TXT to offer in-game disc swapping. It lives
-		// in a directory named after the title's base VCD name.
-		if total > 1 {
-			dir := filepath.Join(mp, ps1.DiscsDirName(g.Discs[0].GameID, g.Title))
-			if err := os.MkdirAll(dir, 0o755); err != nil {
-				return fmt.Errorf("create the disc-swap directory: %w", err)
-			}
-			body := ps1.DiscsFileContents(names)
-			if err := writeFile(filepath.Join(dir, ps1.DiscsFile), []byte(body)); err != nil {
-				return fmt.Errorf("write %s: %w", ps1.DiscsFile, err)
-			}
-		}
 		return nil
 	})
 	if err != nil {
 		return rep, err
+	}
+	// The per-game files live in a different partition from the VCDs, so they
+	// are written under their own mount rather than the one above.
+	if err := s.writePS1Support(ctx, m, names, opts.Widescreen); err != nil {
+		log.Warn("could not write the POPStarter support files", "title", g.Title, "err", err)
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+			"the game is installed but its POPStarter support files could not be written, "+
+				"so disc swapping and shared saves will not work: %s", firstLine(err.Error())))
 	}
 	if wantLauncher {
 		if err := s.installPS1Launcher(ctx, m, g, names[0], staging); err != nil {
@@ -569,6 +646,79 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	}
 	opts.OnProgress.report(StageComplete, 1, g.Title)
 	return rep, nil
+}
+
+// writePS1Support writes the per-game files POPStarter reads, in the support
+// directory each disc gets under __common/POPS.
+//
+// Multi-disc titles need two of them. DISCS.TXT lists every VCD and goes in
+// every disc's directory, which is what the in-game disc-swap menu is built
+// from. VMCDIR.TXT goes in the second disc onward and names disc 1's VCD,
+// because POPStarter otherwise gives each VCD its own virtual memory card and
+// a save made on disc 1 is then invisible on disc 2 -- a three-disc RPG that
+// loses your save at the disc change is technically installed and practically
+// useless.
+//
+// Neither is written for a single-disc title, which needs neither.
+func (s *Services) writePS1Support(ctx context.Context, m *drive.MountManager, names []string, widescreen bool) error {
+	if len(names) < 2 && !widescreen {
+		return nil
+	}
+	discs := ps1.DiscsFileContents(names)
+	vmc := ps1.VMCDirContents(names[0])
+	return m.With(ctx, ps1.CommonPartition, func(mp string) error {
+		for i, name := range names {
+			dir := filepath.Join(mp, ps1.POPSDir, ps1.GameDirName(name))
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return fmt.Errorf("create the support directory for %s: %w", name, err)
+			}
+			if len(names) > 1 {
+				if err := writeFile(filepath.Join(dir, ps1.DiscsFile), []byte(discs)); err != nil {
+					return fmt.Errorf("write %s: %w", ps1.DiscsFile, err)
+				}
+				if i > 0 {
+					if err := writeFile(filepath.Join(dir, ps1.VMCDirFile), []byte(vmc)); err != nil {
+						return fmt.Errorf("write %s: %w", ps1.VMCDirFile, err)
+					}
+				}
+			}
+			if widescreen {
+				if err := addCheat(filepath.Join(dir, ps1.CheatsFile), ps1.Widescreen); err != nil {
+					return err
+				}
+			}
+		}
+		logging.ContextLogger(ctx).Info("wrote POPStarter support files",
+			"discs", len(names), "widescreen", widescreen)
+		return nil
+	})
+}
+
+// addCheat puts a directive in a CHEATS.TXT without disturbing what is already
+// there.
+//
+// The file is the user's: it is where their own cheat codes and per-game
+// tuning live, and an install that replaced it would throw those away. So an
+// existing file is appended to, an existing directive is left alone, and only
+// an absent file is created.
+func addCheat(path, directive string) error {
+	body, err := os.ReadFile(path)
+	if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("read %s: %w", ps1.CheatsFile, err)
+	}
+	for _, line := range strings.Split(string(body), "\n") {
+		if strings.EqualFold(strings.TrimSpace(strings.TrimSuffix(line, "\r")), directive) {
+			return nil
+		}
+	}
+	if len(body) > 0 && !strings.HasSuffix(string(body), "\n") {
+		body = append(body, '\n')
+	}
+	body = append(body, []byte(directive+"\n")...)
+	if err := writeFile(path, body); err != nil {
+		return fmt.Errorf("write %s: %w", ps1.CheatsFile, err)
+	}
+	return nil
 }
 
 // installPS1Launcher writes the one thing that makes an installed PS1 title
