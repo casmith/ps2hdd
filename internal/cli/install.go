@@ -35,6 +35,9 @@ PS2 images are injected as HDLoader partitions with hdl_dump. PS1 images are
 converted to the POPS VCD format and copied into the __.POPS partition; a
 multi-disc title also gets a DISCS.TXT so POPStarter can swap discs in game.
 
+A PS1 install also writes a POPStarter launcher under +OPL/APPS. OPL has no PS1
+support of its own, so without one the game is on the disk and in no menu.
+
 The HDD is revalidated immediately before the write, whatever an earlier
 command established.`,
 		Args: cobra.MinimumNArgs(1),
@@ -237,5 +240,8 @@ func reportInstall(env *Env, rep app.InstallReport) {
 	env.printf("Installed %s (%s).\n", bold(rep.Game.Title), rep.Game.GameID)
 	if rep.AssetsInstalled > 0 {
 		env.printf("  %d artwork file(s) installed.\n", rep.AssetsInstalled)
+	}
+	for _, w := range rep.Warnings {
+		env.printf("  %s %s\n", amber("!"), w)
 	}
 }

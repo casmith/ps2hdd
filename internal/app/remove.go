@@ -173,6 +173,13 @@ func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptio
 		discsDir = ps1.DiscsDirName(g.Discs[0].GameID, g.Title)
 		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+discsDir+"/"+ps1.DiscsFile)
 	}
+	// The launcher lives on a different partition from the VCD, so removing
+	// only __.POPS would leave an entry on OPL's Apps page that boots nothing.
+	launcherDir := ps1.LauncherDirName(names[0])
+	launcherELF := ps1.LauncherELFName(names[0])
+	rep.Files = append(rep.Files,
+		drive.PartitionOPL+"/"+ps1.AppsDir+"/"+launcherDir+"/"+launcherELF,
+		drive.PartitionOPL+"/"+ps1.AppsDir+"/"+launcherDir+"/"+ps1.TitleConfigFile)
 	if opts.PurgeAssets {
 		if paths, err := s.assetPaths(ctx, g); err == nil {
 			rep.Assets = paths
@@ -209,6 +216,24 @@ func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptio
 	})
 	if err != nil {
 		return rep, err
+	}
+	// A launcher that cannot be removed is a dead menu entry, not a lost game,
+	// so it is reported rather than allowed to fail a removal that has already
+	// deleted the discs.
+	if err := m.With(ctx, drive.PartitionOPL, func(mp string) error {
+		dir := filepath.Join(mp, ps1.AppsDir, launcherDir)
+		for _, n := range []string{launcherELF, ps1.TitleConfigFile} {
+			if err := os.Remove(filepath.Join(dir, n)); err != nil && !os.IsNotExist(err) {
+				return fmt.Errorf("remove %s: %w", n, err)
+			}
+		}
+		// Only if it is now empty: a user may keep their own files there.
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			_ = os.Remove(dir)
+		}
+		return nil
+	}); err != nil {
+		logging.ContextLogger(ctx).Warn("could not remove the POPStarter launcher", "title", g.Title, "err", err)
 	}
 	logging.ContextLogger(ctx).Info("removed PS1 game", "title", g.Title, "discs", len(names))
 

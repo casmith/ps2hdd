@@ -32,6 +32,7 @@ type DoctorReport struct {
 	Sources   []app.SourceDirStatus `json:"sources"`
 	Provider  DoctorProvider        `json:"asset_provider"`
 	PS1       ps1.Readiness         `json:"ps1"`
+	Launchers app.LauncherAudit     `json:"ps1_launchers"`
 	// CrossCheck compares the native APA reader against hdl_dump. It is the
 	// check that says whether the foundation everything else stands on is
 	// sound, so it is part of the routine report rather than a separate tool.
@@ -202,6 +203,21 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 			if !ready.Ready() {
 				rep.Problems = append(rep.Problems, ready.Explain()...)
 			}
+			// A title with no launcher is installed, verified and unlistable,
+			// and nothing else in this report would notice.
+			//
+			// A launcher is a copy of POPSTARTER.ELF, so when that file is
+			// known to be absent every title is missing one and saying so
+			// restates the finding above with a longer list. The two Sony
+			// files are not involved: launchers can be written and audited
+			// without them, and a drive waiting on POPS.ELF still deserves a
+			// straight answer about its launchers.
+			if a, err := env.Svc.AuditPS1Launchers(ctx); err == nil {
+				rep.Launchers = a
+				if !ready.RuntimeChecked || ready.Runtime[ps1.POPStarterELF] {
+					rep.Problems = append(rep.Problems, a.Explain()...)
+				}
+			}
 		}
 		if cc, err := env.Svc.CrossCheckReader(ctx); err == nil {
 			rep.CrossCheck = cc
@@ -287,6 +303,7 @@ func renderDoctor(env *Env, rep DoctorReport) {
 			{drive.PartitionOPL, boolLabel(rep.Device.HasOPL, "OK", "missing")},
 			{ps1.POPSPartition, boolLabel(rep.Device.HasPOPS, "OK", "missing")},
 			{ps1.CommonPartition, boolLabel(rep.Device.HasCommon, "OK", "missing")},
+			{"PS1 launchers", launcherLabel(rep.Launchers)},
 			{"PS2 games", fmt.Sprintf("%d", rep.Device.PS2Games)},
 			{"PS1 games", fmt.Sprintf("%d", rep.Device.PS1Games)},
 		})
@@ -385,4 +402,18 @@ func firstLine(s string) string {
 		}
 	}
 	return s
+}
+
+// launcherLabel summarises the launcher audit for the report table.
+func launcherLabel(a app.LauncherAudit) string {
+	switch {
+	case !a.Checked:
+		return dim("unknown")
+	case a.Installed == 0:
+		return dim("no PS1 games")
+	case a.OK():
+		return green(fmt.Sprintf("OK (%d)", a.Installed))
+	default:
+		return amber(fmt.Sprintf("%d of %d unlistable", len(a.Missing)+len(a.TooLong), a.Installed))
+	}
 }

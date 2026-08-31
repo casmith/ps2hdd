@@ -36,6 +36,12 @@ const (
 	// swap feature. It lives in a directory named after the title.
 	DiscsFile = "DISCS.TXT"
 
+	// POPStarterELF is the launcher that ps2hdd copies and renames once per
+	// installed title. Unlike the two files beside it, it is freely
+	// distributable -- it is not Sony code -- but ps2hdd still does not carry
+	// a copy, so it is taken from the runtime the user installed.
+	POPStarterELF = "POPSTARTER.ELF"
+
 	// maxVCDNameLen is POPStarter's filename limit.
 	maxVCDNameLen = 89
 )
@@ -67,7 +73,7 @@ var RuntimeFiles = []RuntimeFile{
 		Required:    true,
 	},
 	{
-		Name:        "POPSTARTER.ELF",
+		Name:        POPStarterELF,
 		Description: "the POPStarter launcher",
 		Copyrighted: false,
 		Required:    true,
