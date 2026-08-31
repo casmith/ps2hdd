@@ -104,7 +104,81 @@ func TestParseCueErrors(t *testing.T) {
 	}
 }
 
-func TestCueValidateRejectsSplitDump(t *testing.T) {
+// A split dump is no longer a dead end: Convert joins the tracks, so the
+// sheet has to validate and to report which file each track came from.
+func TestCueParsesSplitDump(t *testing.T) {
+	const sheet = `FILE "t1.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+FILE "t2.bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+`
+	c, err := ps1.ParseCue(strings.NewReader(sheet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("a split dump no longer fails validation: %v", err)
+	}
+	if !c.Split() || c.FileCount != 2 {
+		t.Errorf("Split=%v FileCount=%d, want true and 2", c.Split(), c.FileCount)
+	}
+	if got := []string{c.Files[0], c.Files[1]}; got[0] != "t1.bin" || got[1] != "t2.bin" {
+		t.Errorf("Files = %v", got)
+	}
+	if c.Tracks[0].FileIndex != 0 || c.Tracks[1].FileIndex != 1 {
+		t.Errorf("track file indexes = %d, %d; want 0, 1",
+			c.Tracks[0].FileIndex, c.Tracks[1].FileIndex)
+	}
+}
+
+// Joining is what makes a split rip installable, and getting the arithmetic
+// wrong shifts every track after the first -- audio that plays from the wrong
+// place, which is not something a user would trace back to here.
+func TestCueJoined(t *testing.T) {
+	const sheet = `FILE "t1.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+FILE "t2.bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+FILE "t3.bin" BINARY
+  TRACK 03 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+`
+	c, err := ps1.ParseCue(strings.NewReader(sheet))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Real track sizes from a Redump rip, all whole sectors.
+	sizes := []int64{3194016, 43674288, 45518256}
+	j, err := c.Joined(sizes)
+	if err != nil {
+		t.Fatalf("Joined: %v", err)
+	}
+	if j.Split() {
+		t.Error("the joined sheet still reports as split")
+	}
+	// 3194016/2352 = 1358 sectors, then +150 for the pregap inside track 2.
+	want := []string{"00:00:00", "00:20:08", "04:27:52"}
+	for i, w := range want {
+		if got := j.Tracks[i].Index1.String(); got != w {
+			t.Errorf("track %d INDEX 01 = %s, want %s", i+1, got, w)
+		}
+	}
+	// INDEX 00 marks the start of the pregap, which is the file boundary.
+	if got := j.Tracks[1].Index0.String(); got != "00:18:08" {
+		t.Errorf("track 2 INDEX 00 = %s, want 00:18:08", got)
+	}
+}
+
+// A track that is not a whole number of sectors is a truncated rip. Joining it
+// anyway would silently shift everything after it.
+func TestCueJoinedRejectsTruncatedTracks(t *testing.T) {
 	const sheet = `FILE "t1.bin" BINARY
   TRACK 01 MODE2/2352
     INDEX 01 00:00:00
@@ -112,16 +186,23 @@ FILE "t2.bin" BINARY
   TRACK 02 AUDIO
     INDEX 01 00:00:00
 `
-	c, err := ps1.ParseCue(strings.NewReader(sheet))
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = c.Validate()
-	if !errors.Is(err, ps1.ErrBadCue) {
+	c, _ := ps1.ParseCue(strings.NewReader(sheet))
+	if _, err := c.Joined([]int64{3194016, 12345}); !errors.Is(err, ps1.ErrBadCue) {
 		t.Fatalf("err = %v, want ErrBadCue", err)
 	}
-	if !strings.Contains(err.Error(), "single BIN") {
-		t.Errorf("error should explain what POPS needs: %v", err)
+	if _, err := c.Joined([]int64{3194016}); err == nil {
+		t.Error("a size list shorter than the file count was accepted")
+	}
+}
+
+func TestMSFFromLBARoundTrips(t *testing.T) {
+	for _, lba := range []int{0, 1, 74, 75, 150, 4499, 4500, 92610, 333000} {
+		if got := ps1.MSFFromLBA(lba).LBA(); got != lba {
+			t.Errorf("MSFFromLBA(%d).LBA() = %d", lba, got)
+		}
+	}
+	if got := ps1.MSFFromLBA(92610).String(); got != "20:34:60" {
+		t.Errorf("MSFFromLBA(92610) = %s, want 20:34:60", got)
 	}
 }
 

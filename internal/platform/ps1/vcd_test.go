@@ -2,10 +2,12 @@ package ps1_test
 
 import (
 	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/casmith/ps2hdd/internal/iso9660/isosynth"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
 )
 
@@ -193,5 +195,100 @@ func TestConvertMatchesCue2POPS(t *testing.T) {
 	// No .partial file may survive a successful run.
 	if _, err := os.Stat(out + ".partial"); !os.IsNotExist(err) {
 		t.Error("a .partial file was left behind")
+	}
+}
+
+// Joining a split rip must produce byte-for-byte what converting the already
+// merged rip produces. That is the whole claim, and it is checkable without
+// any external tool: build one image, write it both ways, convert both.
+func TestConvertJoinsSplitRipIdenticallyToMerged(t *testing.T) {
+	dir := t.TempDir()
+
+	// Track 1 is a real PS1 data track; tracks 2 and 3 are audio, where only
+	// the byte count and sector alignment matter.
+	data, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: "SPLIT_TEST",
+		CDXA:     true,
+		Files:    map[string][]byte{"SYSTEM.CNF": isosynth.PS1SystemCNF("SLUS_001.83")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	audio2 := bytes.Repeat([]byte{0xA1}, 2352*300)
+	audio3 := bytes.Repeat([]byte{0xB2}, 2352*211)
+
+	// The split form, as Redump writes it: the two-second pregap is real data
+	// inside each audio track's own file.
+	for name, b := range map[string][]byte{
+		"s (Track 1).bin": data, "s (Track 2).bin": audio2, "s (Track 3).bin": audio3,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	splitCue := `FILE "s (Track 1).bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+FILE "s (Track 2).bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+FILE "s (Track 3).bin" BINARY
+  TRACK 03 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+`
+	if err := os.WriteFile(filepath.Join(dir, "split.cue"), []byte(splitCue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// The merged form of the same disc, with the timecodes a merging tool
+	// would have written.
+	merged := append(append(append([]byte{}, data...), audio2...), audio3...)
+	if err := os.WriteFile(filepath.Join(dir, "m.bin"), merged, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t1 := len(data) / 2352
+	t2 := t1 + len(audio2)/2352
+	mergedCue := fmt.Sprintf(`FILE "m.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    INDEX 00 %s
+    INDEX 01 %s
+  TRACK 03 AUDIO
+    INDEX 00 %s
+    INDEX 01 %s
+`, ps1.MSFFromLBA(t1), ps1.MSFFromLBA(t1+150), ps1.MSFFromLBA(t2), ps1.MSFFromLBA(t2+150))
+	if err := os.WriteFile(filepath.Join(dir, "merged.cue"), []byte(mergedCue), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	fromSplit := filepath.Join(dir, "split.vcd")
+	fromMerged := filepath.Join(dir, "merged.vcd")
+	if err := ps1.Convert(filepath.Join(dir, "split.cue"), fromSplit, ps1.ConvertOptions{}); err != nil {
+		t.Fatalf("convert the split rip: %v", err)
+	}
+	if err := ps1.Convert(filepath.Join(dir, "merged.cue"), fromMerged, ps1.ConvertOptions{}); err != nil {
+		t.Fatalf("convert the merged rip: %v", err)
+	}
+
+	a, err := os.ReadFile(fromSplit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := os.ReadFile(fromMerged)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, b) {
+		if len(a) != len(b) {
+			t.Fatalf("sizes differ: split %d, merged %d", len(a), len(b))
+		}
+		for i := range a {
+			if a[i] != b[i] {
+				t.Fatalf("first difference at byte %d: split %#x, merged %#x", i, a[i], b[i])
+			}
+		}
 	}
 }

@@ -330,10 +330,21 @@ verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies
 it into `__.POPS`. Multi-disc titles get a `DISCS.TXT` so POPStarter can swap
 discs in game.
 
-The rip must be `MODE2/2352` in a single BIN. Split dumps and 2048-byte MODE1
-images are refused with an explanation rather than converted into something
-that would not boot. A split dump is fixable: [BinMerger](https://github.com/israpps/BinMerger)
-joins a multi-BIN cuesheet into one, which is what the error message points at.
+The rip must be `MODE2/2352`. 2048-byte MODE1 images are refused with an
+explanation rather than converted into something that would not boot.
+
+**A split dump does not need merging first.** Redump-style rips keep every
+track in its own BIN, which POPS cannot read; ps2hdd joins them as it converts,
+concatenating the tracks in cuesheet order and rewriting each timecode to its
+absolute position. Nothing is written to disk twice — the tracks are streamed
+into the VCD in one pass — and the result is byte-for-byte what converting an
+already merged rip produces, which the test suite asserts directly. On one real
+library that took the available titles from 850 to 1,448.
+
+The two-second pregap before an audio track is real data inside that track's
+file, which is what makes plain concatenation correct; a track that is not a
+whole number of 2352-byte sectors is a truncated rip and is refused, because
+joining it would silently shift every track after it.
 
 ## Raw disk safety
 

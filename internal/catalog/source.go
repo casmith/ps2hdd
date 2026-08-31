@@ -378,8 +378,13 @@ func (s *Scanner) cueReferences(root string) (map[string]bool, error) {
 		if err != nil {
 			continue // an unreadable sheet excludes nothing
 		}
-		if c.BinPath != "" {
-			if abs, err := filepath.Abs(c.BinPath); err == nil {
+		// Every track the sheet names, not only the first. A split rip's
+		// later tracks are audio: scanned on their own they have no volume
+		// descriptor, so each one would be reported as "not a PlayStation 1
+		// disc image" -- one spurious problem per track, for a title that is
+		// listed correctly alongside them.
+		for _, p := range c.FilePaths {
+			if abs, err := filepath.Abs(p); err == nil {
 				refs[abs] = true
 			}
 		}

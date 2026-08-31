@@ -244,8 +244,8 @@ covers the ISO 9660 volume descriptor and the root directory.
 
 A PS1 rip is not one file the way a PS2 rip is: it is a cuesheet plus one or
 more data tracks, so the cuesheet is read in full first -- it is a few hundred
-bytes, and it decides whether the rip is usable at all. A split dump is
-rejected there, before any track is decompressed. Installing extracts the whole
+bytes, and it decides whether the rip is usable at all. Identification reads
+only the first track, which is where the volume descriptor lives. Installing extracts the whole
 archive rather than the named member, because the `FILE` line names its track
 by bare filename and the two have to land in the same directory.
 
@@ -525,3 +525,36 @@ Recorded here so they are decisions rather than drift.
   The reusable widgets are a real package (`internal/tui/components`); the views
   are files. Splitting the views into their own package would mean exporting the
   whole model or duplicating it, for no benefit.
+
+---
+
+## Split rips
+
+A Redump-style PS1 rip keeps every track in its own BIN and describes them with
+one cuesheet. POPS reads a single stream, so the tracks are joined during
+conversion rather than being refused.
+
+Joining is plain concatenation in cuesheet order, with every timecode rewritten
+to its absolute position: a track's start is the running sector count of the
+files before it plus whatever its own sheet said. That is correct because the
+two-second pregap before an audio track is real data inside that track's file,
+which Redump sheets state explicitly --
+
+```
+FILE "Game (Track 2).bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+```
+
+-- so there is no gap to synthesise and no sector to invent.
+
+Nothing is merged onto disk first. The tracks are opened together and streamed
+into the VCD in one pass, which avoids writing several hundred megabytes only
+to read them straight back. A single-file rip takes the same code path with one
+file in it, so the split case is not a parallel universe with its own bugs.
+
+A track that is not a whole number of 2352-byte sectors is refused. It means a
+truncated rip, and joining it anyway would shift every track after it by the
+shortfall -- audio that plays from the wrong place, which is not a symptom
+anybody would trace back to here.

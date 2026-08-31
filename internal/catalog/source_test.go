@@ -234,10 +234,48 @@ func TestScanRespectsCancellation(t *testing.T) {
 
 // The scanner must reject a cuesheet POPS cannot use rather than list it as
 // installable and fail later.
-func TestScanPS1ReportsBadCue(t *testing.T) {
+// A split dump is installable now that Convert joins the tracks, so the scan
+// has to list it rather than report it.
+func TestScanPS1ListsSplitDumps(t *testing.T) {
+	root := t.TempDir()
+	data, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: "SPLIT",
+		CDXA:     true,
+		Files:    map[string][]byte{"SYSTEM.CNF": isosynth.PS1SystemCNF("SLUS_001.83")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "a.bin"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// An audio track: content does not matter, whole sectors do.
+	if err := os.WriteFile(filepath.Join(root, "b.bin"), make([]byte, 2352*150), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "split.cue"),
+		[]byte("FILE \"a.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\nFILE \"b.bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 00 00:00:00\n    INDEX 01 00:02:00\n"),
+		0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner()).ScanPS1(context.Background(), root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Problems) != 0 {
+		t.Fatalf("problems = %+v", res.Problems)
+	}
+	if len(res.Games) != 1 || res.Games[0].GameID != "SLUS_001.83" {
+		t.Fatalf("games = %+v", res.Games)
+	}
+}
+
+// A cuesheet naming a file that is not there is still an error: joining cannot
+// invent a missing track.
+func TestScanPS1ReportsMissingTrack(t *testing.T) {
 	root := t.TempDir()
 	if err := os.WriteFile(filepath.Join(root, "split.cue"),
-		[]byte("FILE \"a.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\nFILE \"b.bin\" BINARY\n  TRACK 02 AUDIO\n    INDEX 01 00:00:00\n"),
+		[]byte("FILE \"a.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"),
 		0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -246,9 +284,9 @@ func TestScanPS1ReportsBadCue(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(res.Games) != 0 {
-		t.Errorf("a split dump was listed as installable: %+v", res.Games)
+		t.Errorf("a cuesheet with no data file was listed: %+v", res.Games)
 	}
-	if len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Reason, "single BIN") {
+	if len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Reason, "missing") {
 		t.Errorf("problems = %+v", res.Problems)
 	}
 }

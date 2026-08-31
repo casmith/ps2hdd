@@ -199,16 +199,23 @@ func Convert(cuePath, outPath string, opts ConvertOptions) error {
 	if err := c.Validate(); err != nil {
 		return err
 	}
-	bin, err := os.Open(c.BinPath)
-	if err != nil {
-		return fmt.Errorf("open %s: %w", c.BinName, err)
-	}
-	defer bin.Close()
-	fi, err := bin.Stat()
+	// A split rip is joined on the way through rather than merged on disk
+	// first. The tracks are concatenated in sheet order, which is what the
+	// format means, so there is nothing to gain from writing a second copy of
+	// several hundred megabytes and then reading it straight back.
+	src, binSize, closeAll, err := openTracks(c)
 	if err != nil {
 		return err
 	}
-	binSize := fi.Size()
+	defer closeAll()
+	if c.Split() {
+		joined, err := c.Joined(trackSizes(c))
+		if err != nil {
+			return err
+		}
+		c = joined
+	}
+	bin := src
 
 	header, err := BuildHeader(c, binSize)
 	if err != nil {
@@ -296,4 +303,68 @@ func copyWithPad(dst io.Writer, src io.Reader, total, padAt int64, needPad bool,
 		}
 	}
 	return nil
+}
+
+// trackSizes reports each data file's size, in sheet order.
+//
+// It is separate from openTracks because Joined needs the sizes before the
+// sheet is rewritten, and openTracks has already stat'd them.
+func trackSizes(c Cue) []int64 {
+	out := make([]int64, 0, len(c.FilePaths))
+	for _, p := range c.FilePaths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return out
+		}
+		out = append(out, fi.Size())
+	}
+	return out
+}
+
+// openTracks opens every data file the sheet names and returns them as one
+// stream, along with the total size.
+//
+// A single-file sheet is the same code path with one file in it, which is what
+// keeps the split case from being a parallel universe with its own bugs.
+func openTracks(c Cue) (io.Reader, int64, func(), error) {
+	paths := c.FilePaths
+	if len(paths) == 0 && c.BinPath != "" {
+		paths = []string{c.BinPath}
+	}
+	if len(paths) == 0 {
+		return nil, 0, func() {}, fmt.Errorf("%w: %s names no data file", ErrBadCue, filepath.Base(c.Path))
+	}
+
+	var (
+		files  []*os.File
+		rs     []io.Reader
+		total  int64
+		closer = func() {}
+	)
+	closeAll := func() {
+		for _, f := range files {
+			f.Close()
+		}
+	}
+	for i, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			closeAll()
+			name := p
+			if i < len(c.Files) {
+				name = c.Files[i]
+			}
+			return nil, 0, closer, fmt.Errorf("open %s: %w", filepath.Base(name), err)
+		}
+		fi, err := f.Stat()
+		if err != nil {
+			f.Close()
+			closeAll()
+			return nil, 0, closer, err
+		}
+		files = append(files, f)
+		rs = append(rs, f)
+		total += fi.Size()
+	}
+	return io.MultiReader(rs...), total, closeAll, nil
 }
