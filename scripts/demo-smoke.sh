@@ -71,6 +71,49 @@ step "installing the same title twice is refused"
 ps2hdd install "$DEMO/sources/ps2/Shadow of the Colossus.iso" > "$WORK/dup.txt" 2>&1 || true
 grep -qi "already installed" "$WORK/dup.txt" || fail "a duplicate install was not refused"
 
+step "--all plans the whole library without writing"
+ps2hdd install --all --dry-run > "$WORK/plan.txt" 2>&1
+grep -q "Would install" "$WORK/plan.txt" || fail "the bulk plan reported nothing"
+grep -q "PlayStation 2" "$WORK/plan.txt" || fail "the plan omitted PS2"
+grep -q "PlayStation 1" "$WORK/plan.txt" || fail "the plan omitted PS1"
+# The two platforms consume different pools and the plan has to say which.
+grep -q "APA partition table" "$WORK/plan.txt" || fail "the plan does not name the PS2 pool"
+grep -q "__.POPS" "$WORK/plan.txt" || fail "the plan does not name the PS1 pool"
+# Planning writes nothing.
+before="$(ls "$DEMO/partitions/pops/" | wc -l)"
+ps2hdd install --all --ps1 --dry-run > "$WORK/plan-ps1.txt"
+grep -q "PlayStation 2" "$WORK/plan-ps1.txt" && fail "--ps1 planned PS2 titles as well" || true
+[ "$(ls "$DEMO/partitions/pops/" | wc -l)" = "$before" ] || fail "a dry-run plan wrote to the HDD"
+# --all without --dry-run is refused: planning is the safe half.
+ps2hdd install --all > "$WORK/plan-refused.txt" 2>&1 && fail "--all ran a batch install" || true
+grep -q "dry-run" "$WORK/plan-refused.txt" || fail "the refusal does not say what to add"
+
+step "--from-list plans a chosen subset"
+cat > "$WORK/wanted.txt" <<'LIST'
+# what I actually want
+Gran Turismo 4
+SCUS_974.72     # by serial, with a note
+Metal Gear Solid
+
+Castlevania
+LIST
+ps2hdd install --from-list "$WORK/wanted.txt" --dry-run > "$WORK/list-plan.txt" 2>&1
+# Two of the four are already on the drive by this point -- Castlevania ships
+# installed and Shadow of the Colossus went on above -- so they are skipped
+# rather than counted against the free space a second time.
+grep -q "Would install 2 title" "$WORK/list-plan.txt" \
+  || fail "the list plan did not cover two titles: $(cat "$WORK/list-plan.txt")"
+grep -q "2 already installed" "$WORK/list-plan.txt" \
+  || fail "installed titles were counted into the plan"
+grep -q "PlayStation 2" "$WORK/list-plan.txt" || fail "the list plan omitted PS2"
+grep -q "PlayStation 1" "$WORK/list-plan.txt" || fail "the list plan omitted PS1"
+# A line that resolves to nothing stops the whole plan, by line number: a typo
+# that silently dropped one game from a long list would be found much later.
+printf 'Gran Turismo 4\nGrand Turismo 5\n' > "$WORK/typo.txt"
+ps2hdd install --from-list "$WORK/typo.txt" --dry-run > "$WORK/typo-out.txt" 2>&1 \
+  && fail "a list with an unresolvable entry was planned anyway" || true
+grep -q "line 2" "$WORK/typo-out.txt" || fail "the failure does not name the line"
+
 step "install a multi-disc PS1 title"
 ps2hdd install \
   "$DEMO/sources/psx/Metal Gear Solid/Disc 1.cue" \

@@ -9,6 +9,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/catalog"
+	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
@@ -19,16 +20,22 @@ func newInstallCommand(env *Env) *cobra.Command {
 		noAssets       bool
 		fromSource     bool
 		wantWidescreen bool
+		all            bool
+		onlyPS1        bool
+		onlyPS2        bool
+		fromList       string
 	)
 
 	cmd := &cobra.Command{
-		Use:   "install <image> [image...]",
+		Use:   "install [image...]",
 		Short: "Install a PS1 or PS2 game onto the HDD",
 		Long: `Install a disc image from anywhere on the filesystem.
 
   ps2hdd install ~/Downloads/sotc.iso
   ps2hdd install "Metal Gear Solid (Disc 1).cue" "Metal Gear Solid (Disc 2).cue"
   ps2hdd install --from-source "God Hand"
+  ps2hdd install --all --dry-run
+  ps2hdd install --from-list wanted.txt --dry-run
 
 Naming several images installs them as one multi-disc PlayStation 1 title.
 
@@ -48,11 +55,65 @@ corrects 3D geometry and field of view; HUDs, fonts, menus and 2D backgrounds
 stay stretched, and some games do not run with it. It is one line in a
 CHEATS.TXT, so it can be changed afterwards without reinstalling.
 
+--all plans the whole source library at once. Space is consumed as the plan
+walks the list, so it answers the question a stack of single dry runs cannot:
+not "does this title fit", which is yes for every title taken alone, but where
+the run stops. PS2 titles are placed by replaying hdl_dump's allocator against
+the drive's real chunk map; PS1 titles are counted against the room left inside
+__.POPS, which is a different pool and runs out separately. Narrow it with
+--ps1 or --ps2.
+
+  ps2hdd install --all --dry-run          # everything
+  ps2hdd install --all --ps1 --dry-run    # just the PlayStation 1 library
+
+--from-list plans a chosen subset instead of everything. The file holds one
+title, serial or image path per line; blank lines are skipped and a '#' starts
+a comment, so the list can carry notes and live in version control. Every line
+must resolve -- a typo that quietly dropped one game out of two hundred would
+be noticed months later by its absence. A title containing a '#' is cut short
+by the comment rule; name that one by its serial. The accounting is the same as
+--all, so it answers where a curated run stops rather than whether each title
+fits on its own.
+
+  ps2hdd install --from-list wanted.txt --dry-run
+  ps2hdd install --from-list wanted.txt --ps1 --dry-run
+
+A directory of symbolic links is not an alternative: the source scanner reads
+regular files only, so links are skipped without comment.
+
+--all and --from-list currently require --dry-run. Planning is the safe half; running a
+several-hundred-title write has questions about ordering, resuming and partial
+failure that are not settled yet.
+
 The HDD is revalidated immediately before the write, whatever an earlier
 command established.`,
-		Args: cobra.MinimumNArgs(1),
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			if all && fromList != "" {
+				return fmt.Errorf("--all and --from-list select different things; use one")
+			}
+			if all || fromList != "" {
+				which := "--all"
+				if fromList != "" {
+					which = "--from-list"
+				}
+				if len(args) > 0 {
+					return fmt.Errorf("%s chooses what to install; do not name images as well", which)
+				}
+				if !env.Svc.DryRun {
+					return fmt.Errorf("%s is planning only for now: add --dry-run", which)
+				}
+				opts := app.PlanOptions{PS2: onlyPS2, PS1: onlyPS1}
+				if fromList != "" {
+					return planList(env, ctx, config.ExpandPath(fromList), opts)
+				}
+				return planAll(env, ctx, opts)
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("name a disc image, or use --all or --from-list to plan a set")
+			}
 
 			var games []model.Game
 			if fromSource {
@@ -127,11 +188,30 @@ command established.`,
 	f.BoolVar(&wantWidescreen, "widescreen", false,
 		"turn on POPStarter's widescreen hack for a PS1 title (overrides install.widescreen)")
 	f.BoolVar(&fromSource, "from-source", false, "treat the arguments as titles or IDs in the configured source directories")
+	f.BoolVar(&all, "all", false, "plan every source title that is not installed (needs --dry-run)")
+	f.StringVar(&fromList, "from-list", "", "plan the titles named in this file, one per line (needs --dry-run)")
+	f.BoolVar(&onlyPS1, "ps1", false, "with --all, plan only PlayStation 1 titles")
+	f.BoolVar(&onlyPS2, "ps2", false, "with --all, plan only PlayStation 2 titles")
 	return cmd
 }
 
 // resolveSource finds a source-available title by name or id.
 func resolveSource(c catalog.Catalog, query string) (model.Game, error) {
+	e, err := resolveSourceEntry(c, query)
+	if err != nil {
+		return model.Game{}, err
+	}
+	// The source-side view is what an install acts on: it carries the image
+	// path, where the installed view carries the partition.
+	if e.SourceGame != nil {
+		return *e.SourceGame, nil
+	}
+	return e.Game, nil
+}
+
+// resolveSourceEntry finds the catalog row for a query, which unlike the game
+// alone still knows whether the title is on the drive.
+func resolveSourceEntry(c catalog.Catalog, query string) (catalog.CatalogEntry, error) {
 	matches := c.Find(query)
 	var available []catalog.CatalogEntry
 	for _, m := range matches {
@@ -141,20 +221,16 @@ func resolveSource(c catalog.Catalog, query string) (model.Game, error) {
 	}
 	switch len(available) {
 	case 0:
-		return model.Game{}, fmt.Errorf("no source game matches %q", query)
+		return catalog.CatalogEntry{}, fmt.Errorf("no source game matches %q", query)
 	case 1:
-		g := available[0].Game
-		if available[0].SourceGame != nil {
-			g = *available[0].SourceGame
-		}
-		return g, nil
+		return available[0], nil
 	default:
 		var b strings.Builder
 		fmt.Fprintf(&b, "%q matches %d source games:", query, len(available))
 		for _, m := range available {
 			fmt.Fprintf(&b, "\n  %-4s %-14s %s", m.Platform.Label(), m.GameID, m.Title)
 		}
-		return model.Game{}, errors.New(b.String() + "\n\nName one of them by its game ID.")
+		return catalog.CatalogEntry{}, errors.New(b.String() + "\n\nName one of them by its game ID.")
 	}
 }
 

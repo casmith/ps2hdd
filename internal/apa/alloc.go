@@ -158,3 +158,63 @@ func mergedExtents(chunks []uint32, maxExtent uint32) uint32 {
 	}
 	return uint32(len(ex))
 }
+
+// Allocator replays a run of allocations against a working copy of the chunk
+// map, so that each title is placed on a drive the ones before it have already
+// filled.
+//
+// This is what separates a plan from a stack of independent guesses. Asking
+// AllocationFor about five hundred titles one at a time answers five hundred
+// times over that yes, this title fits on the empty drive -- which is true and
+// useless. Space is consumed as it is claimed, and the answer that matters is
+// where the run stops.
+type Allocator struct {
+	slices []Slice
+}
+
+// NewAllocator takes a working copy of the table's free space. The TOC is not
+// modified, and nothing is written to any disk.
+func (t *TOC) NewAllocator() *Allocator {
+	a := &Allocator{slices: make([]Slice, len(t.Slices))}
+	for i, s := range t.Slices {
+		cp := Slice{TotalChunks: s.TotalChunks, UsedChunks: s.UsedChunks, FreeChunks: s.FreeChunks}
+		cp.ChunkMap = append([]bool(nil), s.ChunkMap...)
+		a.slices[i] = cp
+	}
+	return a
+}
+
+// Place claims the space an image of this size would take and reports it.
+// ok is false when it will not fit, and nothing is claimed in that case.
+func (a *Allocator) Place(imageBytes int64) (int64, bool) {
+	for i := range a.slices {
+		s := &a.slices[i]
+		want, ok := s.allocationChunks(imageBytes)
+		if !ok {
+			continue
+		}
+		taken := 0
+		for c := range s.ChunkMap {
+			if taken == int(want) {
+				break
+			}
+			if !s.ChunkMap[c] {
+				s.ChunkMap[c] = true
+				s.UsedChunks++
+				s.FreeChunks--
+				taken++
+			}
+		}
+		return int64(want) * ChunkMB * 1024 * 1024, true
+	}
+	return 0, false
+}
+
+// FreeBytes is what is left unclaimed across every slice.
+func (a *Allocator) FreeBytes() int64 {
+	var free int64
+	for _, s := range a.slices {
+		free += int64(s.FreeChunks)
+	}
+	return free * ChunkMB * 1024 * 1024
+}
