@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/casmith/ps2hdd/internal/external"
 	"github.com/casmith/ps2hdd/internal/model"
@@ -99,6 +100,7 @@ func InspectArchivedPS2(ctx context.Context, a external.Archive, archivePath str
 	}
 
 	g := img.Game()
+	g.Title = titleForArchive(g.Title, archivePath)
 	g.SourcePath = archivePath
 	g.ArchiveMember = inner.Name
 	for i := range g.Discs {
@@ -106,6 +108,25 @@ func InspectArchivedPS2(ctx context.Context, a external.Archive, archivePath str
 		g.Discs[i].ArchiveMember = inner.Name
 	}
 	return g, loc, nil
+}
+
+// titleForArchive falls back to the archive's own name when the member's does
+// not yield a title.
+//
+// The member is normally the better source -- it is the image's own name, and
+// in most libraries it matches the archive anyway -- but not every archive is
+// named that way. A member called "SLUS-20152 (1.00).iso" leaves nothing once
+// the serial is taken out of it, and the game then reaches the console called
+// "(1 00)". The container's name is what the user chose, so it is the sensible
+// second answer.
+func titleForArchive(fromMember, archivePath string) string {
+	for _, r := range fromMember {
+		if unicode.IsLetter(r) {
+			return fromMember
+		}
+	}
+	base := filepath.Base(archivePath)
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // readHead decompresses the start of an archive member.
@@ -260,7 +281,7 @@ func InspectArchivedPS1(ctx context.Context, a external.Archive, archivePath str
 	}
 	g := model.Game{
 		Platform:         model.PlatformPS1,
-		Title:            d.Title,
+		Title:            titleForArchive(d.Title, archivePath),
 		GameID:           d.GameID,
 		SizeBytes:        d.SizeBytes,
 		InstallSizeBytes: d.VCDBytes,

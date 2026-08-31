@@ -41,6 +41,13 @@ type SourcesConfig struct {
 type InstallConfig struct {
 	SyncAssets         bool `toml:"sync_assets" json:"sync_assets"`
 	VerifyAfterInstall bool `toml:"verify_after_install" json:"verify_after_install"`
+	// Widescreen turns on POPStarter's GTE widescreen hack for every PS1
+	// title installed. Off by default, and deliberately: it corrects 3D
+	// geometry but leaves HUDs, fonts, menus and 2D backgrounds stretched, and
+	// some games do not run with it at all. `--widescreen` overrides this per
+	// install, and the setting can be changed afterwards by editing one
+	// CHEATS.TXT rather than reinstalling.
+	Widescreen bool `toml:"widescreen" json:"widescreen"`
 	// ScratchDir is where an archived image is decompressed before it is
 	// injected. Empty means the cache directory.
 	//

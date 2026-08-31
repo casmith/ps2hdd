@@ -141,7 +141,7 @@ func newInfoCommand(env *Env) *cobra.Command {
 			// A path is inspected directly, so `info` works on an image that
 			// has never been near the HDD.
 			if looksLikePath(query) {
-				g, err := env.Svc.InspectSource(query)
+				g, err := env.Svc.InspectSource(cmd.Context(), query)
 				if err != nil {
 					return err
 				}

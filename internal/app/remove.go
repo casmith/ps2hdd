@@ -168,10 +168,10 @@ func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptio
 	for _, n := range names {
 		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+n)
 	}
-	discsDir := ""
-	if len(names) > 1 {
-		discsDir = ps1.DiscsDirName(g.Discs[0].GameID, g.Title)
-		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+discsDir+"/"+ps1.DiscsFile)
+	// The per-game support directories are in __common, one per disc.
+	for _, n := range names {
+		rep.Files = append(rep.Files,
+			ps1.CommonPartition+"/"+ps1.POPSDir+"/"+ps1.GameDirName(n)+"/")
 	}
 	// The launcher lives on a different partition from the VCD, so removing
 	// only __.POPS would leave an entry on OPL's Apps page that boots nothing.
@@ -203,19 +203,34 @@ func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptio
 				return fmt.Errorf("remove %s: %w", n, err)
 			}
 		}
-		if discsDir != "" {
-			dir := filepath.Join(mp, discsDir)
-			_ = os.Remove(filepath.Join(dir, ps1.DiscsFile))
-			// Only remove the directory if it is now empty; a user may keep
-			// per-game POPStarter files such as VMCDIR.TXT there.
+		return nil
+	})
+	if err != nil {
+		return rep, err
+	}
+	// The support files ps2hdd wrote go with the game. Anything else in the
+	// directory is the user's -- their cheat codes, a virtual memory card with
+	// their saves in it -- so the directory only goes when it is empty.
+	if err := m.With(ctx, ps1.CommonPartition, func(mp string) error {
+		for _, n := range names {
+			dir := filepath.Join(mp, ps1.POPSDir, ps1.GameDirName(n))
+			for _, f := range []string{ps1.DiscsFile, ps1.VMCDirFile} {
+				if err := os.Remove(filepath.Join(dir, f)); err != nil && !os.IsNotExist(err) {
+					return fmt.Errorf("remove %s: %w", f, err)
+				}
+			}
+			// A CHEATS.TXT holding nothing but the directive ps2hdd put there
+			// is ps2hdd's to clean up. One the user has added to is theirs,
+			// and it stays -- along with the directory around it.
+			removeIfOnlyOurs(filepath.Join(dir, ps1.CheatsFile), ps1.Widescreen)
 			if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
 				_ = os.Remove(dir)
 			}
 		}
 		return nil
-	})
-	if err != nil {
-		return rep, err
+	}); err != nil {
+		logging.ContextLogger(ctx).Warn("could not remove the POPStarter support files",
+			"title", g.Title, "err", err)
 	}
 	// A launcher that cannot be removed is a dead menu entry, not a lost game,
 	// so it is reported rather than allowed to fail a removal that has already
@@ -248,6 +263,17 @@ func (s *Services) removePS1(ctx context.Context, g model.Game, opts RemoveOptio
 
 // assetPaths lists the artwork and configuration files belonging to a game
 // that actually exist on the HDD.
+// removeIfOnlyOurs deletes a file whose entire content is the given directive.
+func removeIfOnlyOurs(path, directive string) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return
+	}
+	if strings.TrimSpace(string(body)) == directive {
+		_ = os.Remove(path)
+	}
+}
+
 func (s *Services) assetPaths(ctx context.Context, g model.Game) ([]string, error) {
 	m, err := s.Mounts(ctx)
 	if err != nil {

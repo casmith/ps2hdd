@@ -32,9 +32,37 @@ const (
 	VCDExt = ".VCD"
 	// ELFExt is the extension of a per-title POPStarter launcher.
 	ELFExt = ".ELF"
-	// DiscsFile lists the VCDs of a multi-disc title for POPStarter's disc
-	// swap feature. It lives in a directory named after the title.
+	// Per-game files live in a support directory named after the disc's VCD,
+	// under __common/POPS -- NOT beside the VCD in __.POPS. Both partitions
+	// have a POPS-shaped directory in them and only one of them is read, which
+	// is a mistake with no symptom until a disc change fails mid-game.
+	//
+	// Each disc of a multi-disc title gets its own support directory.
+	//
+	//	__.POPS/SLUS_005.94.Metal Gear Solid_CD1.VCD
+	//	__common/POPS/SLUS_005.94.Metal Gear Solid_CD1/DISCS.TXT
+	//	__common/POPS/SLUS_007.76.Metal Gear Solid_CD2/DISCS.TXT
+	//	__common/POPS/SLUS_007.76.Metal Gear Solid_CD2/VMCDIR.TXT
+
+	// DiscsFile lists every VCD of a multi-disc title, one per line, and goes
+	// in every one of its discs' support directories. It is what POPStarter
+	// offers the disc-swap menu from.
 	DiscsFile = "DISCS.TXT"
+
+	// VMCDirFile names the VCD whose virtual memory card the disc should use.
+	// POPStarter otherwise gives each VCD its own card, so without this a save
+	// made on disc 1 is invisible on disc 2. It goes in the support directory
+	// of every disc after the first and holds disc 1's VCD filename.
+	VMCDirFile = "VMCDIR.TXT"
+
+	// CheatsFile holds raw cheat codes and POPStarter directives for one game.
+	CheatsFile = "CHEATS.TXT"
+
+	// Widescreen is the directive that turns on POPStarter's GTE widescreen
+	// hack. It corrects 3D geometry and field of view; it does not correct
+	// HUDs, fonts, menus or 2D backgrounds, and some games do not survive it,
+	// which is why ps2hdd never applies it unasked.
+	Widescreen = "$WIDESCREEN"
 
 	// POPStarterELF is the launcher that ps2hdd copies and renames once per
 	// installed title. Unlike the two files beside it, it is freely
@@ -214,10 +242,20 @@ func VCDName(gameID, title string, disc, totalDiscs int) string {
 	return base + suffix + VCDExt
 }
 
-// DiscsDirName is the directory beside the VCDs that holds DISCS.TXT for a
-// multi-disc title. POPStarter looks for it under the first disc's base name.
-func DiscsDirName(gameID, title string) string {
-	return strings.TrimSuffix(VCDName(gameID, title, 1, 2), "_CD1"+VCDExt)
+// GameDirName is the per-title directory name: the VCD's base name.
+//
+// Two directories use it, in different partitions and for different reasons --
+// +OPL/APPS/<name> holds the launcher OPL lists, __common/POPS/<name> holds the
+// per-game files POPStarter reads -- and both are keyed off the VCD because
+// that is the name POPStarter and OPL each derive their own lookups from.
+func GameDirName(vcdName string) string {
+	return strings.TrimSuffix(vcdName, filepath.Ext(vcdName))
+}
+
+// VMCDirContents renders a VMCDIR.TXT body: the VCD filename whose memory card
+// this disc should share.
+func VMCDirContents(firstDiscVCD string) string {
+	return firstDiscVCD + "\n"
 }
 
 // DiscsFileContents renders the DISCS.TXT body listing a title's VCDs in disc

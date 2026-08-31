@@ -83,8 +83,40 @@ grep -q "_CD2.VCD" "$WORK/mgs.txt" || fail "disc 2 VCD missing"
 # The two discs of this release carry different serials; that must survive.
 grep -q "SLUS_005.94" "$WORK/mgs.txt" || fail "disc 1 serial lost"
 grep -q "SLUS_007.76" "$WORK/mgs.txt" || fail "disc 2 serial lost"
-test -f "$DEMO/partitions/pops/SLUS_005.94.Metal Gear Solid/DISCS.TXT" \
-  || fail "DISCS.TXT was not written"
+# The per-game files go under __common/POPS, one directory per disc, and NOT
+# beside the VCDs in __.POPS. Both partitions have a POPS-shaped directory and
+# only one of them is read, so the partition is part of the assertion.
+CD1="$DEMO/partitions/common/POPS/SLUS_005.94.Metal Gear Solid_CD1"
+CD2="$DEMO/partitions/common/POPS/SLUS_007.76.Metal Gear Solid_CD2"
+test -f "$CD1/DISCS.TXT" || fail "disc 1 has no DISCS.TXT"
+test -f "$CD2/DISCS.TXT" || fail "disc 2 has no DISCS.TXT"
+grep -q "_CD2.VCD" "$CD1/DISCS.TXT" || fail "DISCS.TXT does not list both discs"
+# VMCDIR.TXT points the later discs at disc 1's card, or a save made on disc 1
+# is gone after the swap. Disc 1 owns the card and must not have one.
+test -f "$CD2/VMCDIR.TXT" || fail "disc 2 has no VMCDIR.TXT"
+grep -q "_CD1.VCD" "$CD2/VMCDIR.TXT" || fail "VMCDIR.TXT does not name disc 1"
+test -f "$CD1/VMCDIR.TXT" && fail "disc 1 was pointed at another card" || true
+test -e "$DEMO/partitions/pops/SLUS_005.94.Metal Gear Solid" \
+  && fail "support files were written into __.POPS, where POPStarter does not look" || true
+
+step "--widescreen writes the directive, and only when asked"
+test -f "$CD1/CHEATS.TXT" && fail "widescreen was applied without being asked for" || true
+ps2hdd remove "Metal Gear Solid"
+ps2hdd install --widescreen \
+  "$DEMO/sources/psx/Metal Gear Solid/Disc 1.cue" \
+  "$DEMO/sources/psx/Metal Gear Solid/Disc 2.cue" \
+  --title "Metal Gear Solid"
+grep -qx '\$WIDESCREEN' "$CD1/CHEATS.TXT" || fail "the widescreen directive was not written"
+grep -qx '\$WIDESCREEN' "$CD2/CHEATS.TXT" || fail "disc 2 did not get the directive"
+# A user's own codes in that file are theirs and must survive a reinstall.
+printf '$SAFEMODE\n' > "$CD1/CHEATS.TXT"
+ps2hdd remove "Metal Gear Solid"
+ps2hdd install --widescreen \
+  "$DEMO/sources/psx/Metal Gear Solid/Disc 1.cue" \
+  "$DEMO/sources/psx/Metal Gear Solid/Disc 2.cue" \
+  --title "Metal Gear Solid"
+grep -qx '\$SAFEMODE' "$CD1/CHEATS.TXT" || fail "a user's own cheat code was discarded"
+grep -qx '\$WIDESCREEN' "$CD1/CHEATS.TXT" || fail "the directive was not appended"
 
 step "the predicted install size is the VCD that gets written"
 # The estimate is what a space check acts on, so it is checked against the

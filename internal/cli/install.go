@@ -14,10 +14,11 @@ import (
 
 func newInstallCommand(env *Env) *cobra.Command {
 	var (
-		title      string
-		hidden     bool
-		noAssets   bool
-		fromSource bool
+		title          string
+		hidden         bool
+		noAssets       bool
+		fromSource     bool
+		wantWidescreen bool
 	)
 
 	cmd := &cobra.Command{
@@ -32,11 +33,20 @@ func newInstallCommand(env *Env) *cobra.Command {
 Naming several images installs them as one multi-disc PlayStation 1 title.
 
 PS2 images are injected as HDLoader partitions with hdl_dump. PS1 images are
-converted to the POPS VCD format and copied into the __.POPS partition; a
-multi-disc title also gets a DISCS.TXT so POPStarter can swap discs in game.
+converted to the POPS VCD format and copied into the __.POPS partition.
+
+Archives are read in place: a .7z, .zip or .rar holding a disc image can be
+named directly, and only an install actually unpacks it.
 
 A PS1 install also writes a POPStarter launcher under +OPL/APPS. OPL has no PS1
-support of its own, so without one the game is on the disk and in no menu.
+support of its own, so without one the game is on the disk and in no menu. A
+multi-disc title also gets a DISCS.TXT so POPStarter can swap discs in game and
+a VMCDIR.TXT so every disc shares one memory card.
+
+--widescreen turns on POPStarter's GTE widescreen hack for a PS1 title. It
+corrects 3D geometry and field of view; HUDs, fonts, menus and 2D backgrounds
+stay stretched, and some games do not run with it. It is one line in a
+CHEATS.TXT, so it can be changed afterwards without reinstalling.
 
 The HDD is revalidated immediately before the write, whatever an earlier
 command established.`,
@@ -61,7 +71,7 @@ command established.`,
 					games = append(games, g)
 				}
 			} else {
-				g, err := env.Svc.InspectSources(args, title)
+				g, err := env.Svc.InspectSources(ctx, args, title)
 				if err != nil {
 					return err
 				}
@@ -69,10 +79,15 @@ command established.`,
 			}
 
 			syncAssets := env.Config.Install.SyncAssets && !noAssets
+			widescreen := env.Config.Install.Widescreen
+			if cmd.Flags().Changed("widescreen") {
+				widescreen = wantWidescreen
+			}
 			opts := app.InstallOptions{
 				Title:      title,
 				Hidden:     hidden,
 				SyncAssets: syncAssets,
+				Widescreen: widescreen,
 			}
 
 			var reports []app.InstallReport
@@ -109,6 +124,8 @@ command established.`,
 	f.StringVar(&title, "title", "", "override the title shown in OPL")
 	f.BoolVar(&hidden, "hidden", false, "hide a PS2 game from the PS2 HDD browser")
 	f.BoolVar(&noAssets, "no-assets", false, "do not sync artwork after installing")
+	f.BoolVar(&wantWidescreen, "widescreen", false,
+		"turn on POPStarter's widescreen hack for a PS1 title (overrides install.widescreen)")
 	f.BoolVar(&fromSource, "from-source", false, "treat the arguments as titles or IDs in the configured source directories")
 	return cmd
 }

@@ -276,3 +276,45 @@ func TestScanPS1FindsGamesInsideArchives(t *testing.T) {
 		t.Errorf("SizeBytes = %d, want %d", g.SizeBytes, len(data))
 	}
 }
+
+// `install game.7z` and picking the same file out of the library must reach
+// the same code and produce the same entry. The title is the part that used to
+// give it away: an archive whose member is named after the serial alone leaves
+// nothing once the serial is stripped, and the game reached the console called
+// "(1 00)".
+func TestArchivedTitleFallsBackToTheArchiveName(t *testing.T) {
+	root := t.TempDir()
+	// Build the image, then repack it under a member name that carries no
+	// title of its own -- the shape a good many real archives actually use.
+	iso := filepath.Join(t.TempDir(), "SLUS-20152 (1.00).iso")
+	data, err := isosynth.Build(isosynth.Image{
+		VolumeID: "ACE_COMBAT_04", PadBlocks: 400,
+		Files: map[string][]byte{
+			"SYSTEM.CNF":  isosynth.PS2SystemCNF("SLUS_201.52"),
+			"SLUS_201.52": []byte("ELF"),
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(iso, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, "Ace Combat 04 - Shattered Skies (USA).7z")
+	cmd := exec.Command(sevenZip(t), "a", "-mx=0", "-y", archive, iso)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build %s: %v\n%s", archive, err, out)
+	}
+
+	a := external.Archive{Runner: &external.ExecRunner{}}
+	g, _, err := catalog.InspectArchivedPS2(context.Background(), a, archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.GameID != "SLUS_201.52" {
+		t.Errorf("GameID = %q", g.GameID)
+	}
+	if g.Title != "Ace Combat 04 - Shattered Skies (USA)" {
+		t.Errorf("Title = %q, want the archive's own name", g.Title)
+	}
+}

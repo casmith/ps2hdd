@@ -218,7 +218,22 @@ func TestDiscsFile(t *testing.T) {
 	if got != want {
 		t.Errorf("DISCS.TXT =\n%q\nwant\n%q", got, want)
 	}
-	if dir := ps1.DiscsDirName("SLUS_005.94", "Metal Gear Solid"); dir != "SLUS_005.94.Metal Gear Solid" {
-		t.Errorf("DiscsDirName = %q", dir)
+	// Each disc gets its own support directory, named after its own VCD --
+	// including the _CD suffix, because the directories are keyed on the file
+	// POPStarter is looking at and not on the release.
+	if dir := ps1.GameDirName(names[0]); dir != "SLUS_005.94.Metal Gear Solid_CD1" {
+		t.Errorf("GameDirName(disc 1) = %q", dir)
+	}
+	if dir := ps1.GameDirName(names[1]); dir != "SLUS_007.76.Metal Gear Solid_CD2" {
+		t.Errorf("GameDirName(disc 2) = %q", dir)
+	}
+}
+
+// VMCDIR.TXT names the VCD whose memory card the disc shares, one line. A
+// documented way to get this wrong is to put the title in it instead.
+func TestVMCDirContents(t *testing.T) {
+	first := ps1.VCDName("SLUS_005.94", "Metal Gear Solid", 1, 2)
+	if got, want := ps1.VMCDirContents(first), first+"\n"; got != want {
+		t.Errorf("VMCDIR.TXT = %q, want %q", got, want)
 	}
 }
