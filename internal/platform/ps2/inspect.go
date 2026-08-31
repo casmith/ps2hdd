@@ -5,6 +5,7 @@ package ps2
 import (
 	"errors"
 	"fmt"
+	"github.com/casmith/ps2hdd/internal/apa"
 	"io"
 	"os"
 	"path/filepath"
@@ -46,19 +47,27 @@ type Image struct {
 
 // Game converts an inspected image into a catalog entry.
 func (i Image) Game() model.Game {
+	// An image does not cost its own size on an APA drive: it is rounded up
+	// to whole 128 MiB chunks and charged partition overhead on top, which can
+	// take another chunk. Exactly how much depends on where the drive's free
+	// chunks are, and there is no drive here, so the honest figure is the
+	// worst case. See apa.MaxAllocationFor.
+	footprint := apa.MaxAllocationFor(i.SizeBytes)
 	return model.Game{
-		Platform:   model.PlatformPS2,
-		Title:      i.Title,
-		GameID:     i.GameID,
-		SizeBytes:  i.SizeBytes,
-		Media:      i.Media,
-		SourcePath: i.Path,
+		Platform:         model.PlatformPS2,
+		Title:            i.Title,
+		GameID:           i.GameID,
+		SizeBytes:        i.SizeBytes,
+		InstallSizeBytes: footprint,
+		Media:            i.Media,
+		SourcePath:       i.Path,
 		Discs: []model.Disc{{
-			Number:     1,
-			GameID:     i.GameID,
-			Title:      i.Title,
-			SourcePath: i.Path,
-			SizeBytes:  i.SizeBytes,
+			Number:           1,
+			GameID:           i.GameID,
+			Title:            i.Title,
+			SourcePath:       i.Path,
+			SizeBytes:        i.SizeBytes,
+			InstallSizeBytes: footprint,
 		}},
 	}
 }

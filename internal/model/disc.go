@@ -13,4 +13,7 @@ type Disc struct {
 	ArchiveMember string `json:"archive_member,omitempty"`
 	InstalledName string `json:"installed_name,omitempty"`
 	SizeBytes     int64  `json:"size_bytes,omitempty"`
+	// InstallSizeBytes is this disc's footprint once installed. See
+	// Game.InstallSizeBytes.
+	InstallSizeBytes int64 `json:"install_size_bytes,omitempty"`
 }

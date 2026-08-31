@@ -99,9 +99,12 @@ func (m *Model) confirmInstall(t *components.Table) (tea.Model, tea.Cmd) {
 		return m, m.statusFor("Already installed.", true)
 	}
 
+	// What the drive is asked for, not what the files weigh: comparing image
+	// bytes against free space is how a batch that does not fit looks like one
+	// that does.
 	var total int64
 	for _, g := range installable {
-		total += g.SizeBytes
+		total += g.InstallSize()
 	}
 	details := [][2]string{
 		{"Games", fmt.Sprintf("%d", len(installable))},
@@ -224,7 +227,7 @@ func (m *Model) renderSources(p model.Platform) string {
 	var total int64
 	selected := t.ExplicitSelectionCount()
 	for _, g := range m.selectedGames(t, false) {
-		total += g.SizeBytes
+		total += g.InstallSize()
 	}
 	b.WriteString("\n\n")
 	if selected > 0 {

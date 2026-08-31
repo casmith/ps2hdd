@@ -187,7 +187,7 @@ func (s *Services) installPS2(ctx context.Context, g model.Game, opts InstallOpt
 	if err := s.ensureNotInstalled(ctx, g); err != nil {
 		return rep, err
 	}
-	if err := s.ensureSpace(ctx, g); err != nil {
+	if err := s.ensurePS2Space(ctx, g); err != nil {
 		return rep, err
 	}
 	if g.Media == model.MediaUnknown {
@@ -311,16 +311,80 @@ func (s *Services) ensureNotInstalled(ctx context.Context, g model.Game) error {
 	return nil
 }
 
-func (s *Services) ensureSpace(ctx context.Context, g model.Game) error {
-	free, err := s.FreeSpace(ctx)
+// ensurePS2Space checks a title against the drive's unallocated APA chunks.
+//
+// What a title costs is decided by hdl_dump, and it is neither the image's
+// size nor the image rounded up to a chunk: partition overhead is charged on
+// top and can take another whole one. Rather than approximate that, the real
+// partition table is read and the allocation is replayed against it.
+func (s *Services) ensurePS2Space(ctx context.Context, g model.Game) error {
+	t, err := s.Target(ctx, false)
 	if err != nil {
 		return err
 	}
-	// APA allocates in 128 MiB chunks, so the real cost is rounded up.
-	const chunk = int64(apa.ChunkMB) * 1024 * 1024
-	needed := ((g.SizeBytes + chunk - 1) / chunk) * chunk
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	toc, err := apa.ReadTOC(f, t.SizeBytes)
+	if err != nil {
+		return err
+	}
+	needed, ok := toc.AllocationFor(g.SizeBytes)
+	if !ok {
+		_, _, free := toc.Chunks()
+		return &InsufficientSpaceError{
+			Title:  g.Title,
+			Needed: apa.MaxAllocationFor(g.SizeBytes),
+			Free:   int64(free) * int64(apa.ChunkMB) * 1024 * 1024,
+			Where:  "the APA partition table",
+		}
+	}
+	logging.ContextLogger(ctx).Debug("space check",
+		"title", g.Title, "image", g.SizeBytes, "allocation", needed)
+	return nil
+}
+
+// ensurePS1Space checks a title against the room left inside __.POPS.
+//
+// Not against the drive's unallocated chunks: a VCD is a file inside a
+// partition that already exists, so free APA space is the wrong quantity in
+// both directions. It says yes when __.POPS is full, and no when __.POPS has
+// plenty of room but the drive has been fully partitioned -- which is the
+// normal end state of a drive somebody has finished setting up.
+func (s *Services) ensurePS1Space(ctx context.Context, g model.Game) error {
+	needed := g.InstallSize()
+	if needed <= 0 {
+		return nil
+	}
+	m, err := s.Mounts(ctx)
+	if err != nil {
+		return err
+	}
+	var free int64
+	if err := m.With(ctx, ps1.POPSPartition, func(mp string) error {
+		free, err = freeSpace(mp)
+		return err
+	}); err != nil {
+		return err
+	}
+	// pfsfuse reports the partition's real free zones through statfs, but a
+	// build that does not is indistinguishable from a full partition. Zero is
+	// therefore read as "no answer" and the install is allowed to proceed and
+	// fail honestly, rather than being refused on a number that means nothing.
+	if free <= 0 {
+		logging.ContextLogger(ctx).Warn("could not measure free space in "+ps1.POPSPartition,
+			"title", g.Title)
+		return nil
+	}
 	if needed > free {
-		return &InsufficientSpaceError{Title: g.Title, Needed: needed, Free: free}
+		return &InsufficientSpaceError{
+			Title:  g.Title,
+			Needed: needed,
+			Free:   free,
+			Where:  ps1.POPSPartition,
+		}
 	}
 	return nil
 }
@@ -349,7 +413,7 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	if err := s.ensureNotInstalled(ctx, g); err != nil {
 		return rep, err
 	}
-	if err := s.ensureSpace(ctx, g); err != nil {
+	if err := s.ensurePS1Space(ctx, g); err != nil {
 		return rep, err
 	}
 

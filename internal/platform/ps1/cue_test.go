@@ -2,6 +2,7 @@ package ps1_test
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -273,5 +274,133 @@ func TestMSF(t *testing.T) {
 		if _, err := ps1.ParseMSF(bad); err == nil {
 			t.Errorf("ParseMSF(%q) accepted an invalid timecode", bad)
 		}
+	}
+}
+
+// writeRip lays down a cuesheet and its track files, each a whole number of
+// sectors, and returns the cuesheet's path.
+func writeRip(t *testing.T, sheet string, trackSectors ...int) string {
+	t.Helper()
+	dir := t.TempDir()
+	for i, sectors := range trackSectors {
+		name := filepath.Join(dir, fmt.Sprintf("track%02d.bin", i+1))
+		if err := os.WriteFile(name, make([]byte, sectors*ps1.SectorSize), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	p := filepath.Join(dir, "rip.cue")
+	if err := os.WriteFile(p, []byte(sheet), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// A split dump's weight is all of its tracks. Reading only the file the first
+// FILE line names is what made a space check pass and the install then run out
+// of room, and on a music-heavy title the two differ by most of the disc.
+func TestSourceBytesTotalsEveryTrack(t *testing.T) {
+	sheet := `FILE "track01.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+FILE "track02.bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+FILE "track03.bin" BINARY
+  TRACK 03 AUDIO
+    INDEX 00 00:00:00
+    INDEX 01 00:02:00
+`
+	c, err := ps1.ParseCueFile(writeRip(t, sheet, 10, 300, 500))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.SourceBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(810 * ps1.SectorSize); got != want {
+		t.Errorf("got %d bytes, want %d (the first track alone is %d)", got, want, 10*ps1.SectorSize)
+	}
+}
+
+func TestSourceBytesOnASingleFileSheet(t *testing.T) {
+	sheet := `FILE "track01.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+`
+	c, err := ps1.ParseCueFile(writeRip(t, sheet, 400))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := c.SourceBytes()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := int64(400 * ps1.SectorSize); got != want {
+		t.Errorf("got %d, want %d", got, want)
+	}
+}
+
+// A missing track has to be reported rather than silently totalling to less.
+func TestSourceBytesReportsAMissingTrack(t *testing.T) {
+	sheet := `FILE "track01.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+FILE "gone.bin" BINARY
+  TRACK 02 AUDIO
+    INDEX 01 00:00:00
+`
+	c, err := ps1.ParseCueFile(writeRip(t, sheet, 10))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.SourceBytes(); err == nil {
+		t.Fatal("a sheet referencing a missing track totalled without complaint")
+	}
+}
+
+// The VCD is the POPS header, the tracks, and any gap the conversion
+// materialises for a CDRWIN-style sheet. Every term matters: dropping the
+// header understates every title by a megabyte, and dropping the gap
+// understates the sheets that declare a pregap rather than including it.
+func TestVCDSizeAccountsForHeaderAndGap(t *testing.T) {
+	const tracks = int64(1000 * ps1.SectorSize)
+	if got, want := ps1.VCDSize(tracks, 0), int64(ps1.HeaderSize)+tracks; got != want {
+		t.Errorf("no gap: got %d, want %d", got, want)
+	}
+	if got, want := ps1.VCDSize(tracks, 150), int64(ps1.HeaderSize)+tracks+150*ps1.SectorSize; got != want {
+		t.Errorf("one pregap: got %d, want %d", got, want)
+	}
+	if got := ps1.VCDSize(0, 0); got != 0 {
+		t.Errorf("an empty rip was charged %d bytes", got)
+	}
+}
+
+// GapSectors counts the lead-in the conversion inserts, which is what makes
+// the predicted VCD match the one Convert writes. The lead-in is 150 frames.
+func TestGapSectorsMatchesTheConversion(t *testing.T) {
+	plain, err := ps1.ParseCue(strings.NewReader(`FILE "a.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := plain.GapSectors(); got != 0 {
+		t.Errorf("a sheet with no pregap reported %d gap sectors", got)
+	}
+	cdrwin, err := ps1.ParseCue(strings.NewReader(`FILE "a.bin" BINARY
+  TRACK 01 MODE2/2352
+    INDEX 01 00:00:00
+  TRACK 02 AUDIO
+    PREGAP 00:02:00
+    INDEX 01 00:10:00
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cdrwin.GapSectors(); got != 150 {
+		t.Errorf("a CDRWIN sheet reported %d gap sectors, want 150", got)
 	}
 }

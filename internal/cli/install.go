@@ -149,6 +149,12 @@ func confirmInstall(env *Env, g model.Game) bool {
 		{"ID", g.GameID},
 		{"Size", model.HumanSize(g.SizeBytes)},
 	}
+	// The footprint is not the image's size: an APA partition is rounded up to
+	// 128 MiB chunks with overhead on top, and a VCD gains a 1 MiB POPS
+	// header. Showing it only when it differs keeps the common case quiet.
+	if n := g.InstallSize(); n != g.SizeBytes {
+		pairs = append(pairs, [2]string{"On HDD", model.HumanSize(n)})
+	}
 	if g.IsMultiDisc() {
 		pairs = append(pairs, [2]string{"Discs", fmt.Sprintf("%d", g.DiscCount())})
 	}

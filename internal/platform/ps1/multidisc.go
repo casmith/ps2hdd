@@ -113,14 +113,16 @@ func Group(discs []Disc, sourceRoot string) []model.Game {
 				n = i + 1
 			}
 			g.Discs = append(g.Discs, model.Disc{
-				Number:        n,
-				ArchiveMember: d.ArchiveMember,
-				GameID:        d.GameID,
-				Title:         d.Title,
-				SourcePath:    d.SourcePath(),
-				SizeBytes:     d.SizeBytes,
+				Number:           n,
+				ArchiveMember:    d.ArchiveMember,
+				GameID:           d.GameID,
+				Title:            d.Title,
+				SourcePath:       d.SourcePath(),
+				SizeBytes:        d.SizeBytes,
+				InstallSizeBytes: d.VCDBytes,
 			})
 			g.SizeBytes += d.SizeBytes
+			g.InstallSizeBytes += d.VCDBytes
 		}
 		out = append(out, g)
 	}
@@ -206,13 +208,15 @@ func GroupExplicit(discs []Disc, title string) model.Game {
 			n = i + 1
 		}
 		g.Discs = append(g.Discs, model.Disc{
-			Number:     n,
-			GameID:     d.GameID,
-			Title:      d.Title,
-			SourcePath: d.SourcePath(),
-			SizeBytes:  d.SizeBytes,
+			Number:           n,
+			GameID:           d.GameID,
+			Title:            d.Title,
+			SourcePath:       d.SourcePath(),
+			SizeBytes:        d.SizeBytes,
+			InstallSizeBytes: d.VCDBytes,
 		})
 		g.SizeBytes += d.SizeBytes
+		g.InstallSizeBytes += d.VCDBytes
 	}
 	return g
 }

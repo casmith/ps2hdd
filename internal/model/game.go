@@ -55,15 +55,24 @@ const (
 // Game is one logical title. A multi-disc PS1 release is a single Game with
 // several Discs; a PS2 title always has exactly one Disc.
 type Game struct {
-	Platform       Platform  `json:"platform"`
-	Title          string    `json:"title"`
-	GameID         string    `json:"game_id"`
-	SizeBytes      int64     `json:"size_bytes"`
-	StorageBackend string    `json:"storage_backend,omitempty"`
-	Media          MediaType `json:"media,omitempty"`
-	Discs          []Disc    `json:"discs,omitempty"`
-	Installed      bool      `json:"installed"`
-	SourcePath     string    `json:"source_path,omitempty"`
+	Platform  Platform `json:"platform"`
+	Title     string   `json:"title"`
+	GameID    string   `json:"game_id"`
+	SizeBytes int64    `json:"size_bytes"`
+	// InstallSizeBytes is what the title costs on the PS2 HDD, which is not
+	// its size as a file. A PS2 image is rounded up to whole 128 MiB APA
+	// chunks and charged partition overhead on top; a PS1 rip gains a 1 MiB
+	// POPS header and any pregap the conversion materialises. For an already
+	// installed title it is the measured footprint, so it equals SizeBytes.
+	//
+	// Zero means "not known here" -- a source entry built without the drive
+	// present, say -- and callers fall back to SizeBytes.
+	InstallSizeBytes int64     `json:"install_size_bytes,omitempty"`
+	StorageBackend   string    `json:"storage_backend,omitempty"`
+	Media            MediaType `json:"media,omitempty"`
+	Discs            []Disc    `json:"discs,omitempty"`
+	Installed        bool      `json:"installed"`
+	SourcePath       string    `json:"source_path,omitempty"`
 	// ArchiveMember is the path inside SourcePath when the source is an
 	// archive rather than a loose image. Empty for a loose image, and that
 	// emptiness is what every caller tests to decide whether the source can
@@ -126,4 +135,17 @@ func HumanSize(b int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(b)/float64(div), "KMGTP"[exp])
+}
+
+// InstallSize is what the title will cost on the HDD, falling back to the
+// source size when the footprint was not worked out.
+//
+// Callers that are about to write to the drive should prefer a figure computed
+// against that drive's actual partition table; this is the best answer
+// available without one.
+func (g Game) InstallSize() int64 {
+	if g.InstallSizeBytes > 0 {
+		return g.InstallSizeBytes
+	}
+	return g.SizeBytes
 }

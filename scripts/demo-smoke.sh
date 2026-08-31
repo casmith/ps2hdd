@@ -86,6 +86,19 @@ grep -q "SLUS_007.76" "$WORK/mgs.txt" || fail "disc 2 serial lost"
 test -f "$DEMO/partitions/pops/SLUS_005.94.Metal Gear Solid/DISCS.TXT" \
   || fail "DISCS.TXT was not written"
 
+step "the predicted install size is the VCD that gets written"
+# The estimate is what a space check acts on, so it is checked against the
+# file, not against itself. A split rip is the case that used to be wrong:
+# only the first FILE was measured, and the audio tracks went uncounted.
+predicted=$(ps2hdd install --json --dry-run \
+  "$DEMO/sources/psx/Final Fantasy VII/Disc 1.cue" \
+  | python3 -c 'import json,sys; r=json.load(sys.stdin); print((r[0] if isinstance(r,list) else r)["game"]["install_size_bytes"])')
+ps2hdd install "$DEMO/sources/psx/Final Fantasy VII/Disc 1.cue" --title "FF7 Size Check"
+actual=$(stat -c%s "$DEMO"/partitions/pops/*FF7\ Size\ Check.VCD)
+[ "$predicted" = "$actual" ] \
+  || fail "predicted $predicted bytes, wrote $actual"
+ps2hdd remove "FF7 Size Check"
+
 step "the PS1 title got a launcher OPL can list"
 # OPL has no PS1 support of its own: without this directory the game is on the
 # disk, verified, and in no menu. The launcher points at disc 1; POPStarter

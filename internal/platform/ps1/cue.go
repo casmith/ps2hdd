@@ -323,6 +323,36 @@ func (c Cue) Validate() error {
 	return nil
 }
 
+// SourceBytes totals every track file the sheet lists.
+//
+// Not the size of the file the first FILE line names: a Redump-style split
+// dump keeps each track in its own BIN, and all of them go into the VCD. Using
+// only the first understates a music-heavy title by most of the disc, which is
+// how a space check can pass and the install then run out of room.
+func (c Cue) SourceBytes() (int64, error) {
+	paths := c.FilePaths
+	if len(paths) == 0 && c.BinPath != "" {
+		paths = []string{c.BinPath}
+	}
+	var total int64
+	for _, p := range paths {
+		fi, err := os.Stat(p)
+		if err != nil {
+			return 0, fmt.Errorf("%w: %s references %s, which is missing",
+				ErrBadCue, filepath.Base(c.Path), filepath.Base(p))
+		}
+		total += fi.Size()
+	}
+	return total, nil
+}
+
+// GapSectors is how many sectors the conversion adds that are in no track
+// file. A CDRWIN-style sheet declares its pregap rather than including it, so
+// Convert materialises it and the VCD comes out that much larger.
+func (c Cue) GapSectors() int {
+	return leadInSectors * (c.PregapCount() + c.PostgapCount())
+}
+
 // LooksLikeCDRWIN reports the pregap convention CDRWIN-style sheets use: a
 // single explicit PREGAP and no POSTGAP. cue2pops compensates for those dumps
 // by inserting the pregap into the image, and so does the built-in converter.

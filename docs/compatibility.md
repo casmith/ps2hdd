@@ -208,6 +208,52 @@ either; ps2hdd installs what a provider gives it without transforming images.
 
 ---
 
+## What a title costs on the drive
+
+Neither platform costs what its source file weighs, and both used to be
+reported as if they did.
+
+**PS2.** hdl_dump rounds the image up to whole megabytes, takes 128 MiB APA
+chunks until they cover it, merges the adjacent ones pairwise, and *then*
+charges overhead: 4 MiB for the main extent and 1 MiB for each sub-extent. If
+the chunks already taken do not cover the image plus that overhead, it takes
+another whole chunk (`apa.c`, `apa_allocate_space_in_slice`).
+
+That last step makes the cost depend on **where** the free chunks are, not only
+how many there are. The merge is a buddy merge -- two extents join only when
+they are adjacent, the same size, and the pair is aligned to twice it -- so a
+contiguous run collapses to two or three extents and is charged almost nothing,
+while a fragmented one merges to nothing and is charged a megabyte per chunk.
+The same 4.5 GB image can cost 4608 MiB on one drive and 4736 MiB on another.
+
+ps2hdd therefore does not estimate this. The space check reads the real
+partition table and replays the allocation against it
+(`apa.TOC.AllocationFor`). A source listing has no drive in hand, so it shows
+the worst case instead (`apa.MaxAllocationFor`), which is the figure that
+cannot be an underestimate.
+
+Measured over a 514-title library, the image sizes total 1,398.6 GiB and the
+footprints 1,442.8 GiB: **3.2% more**, a median of 84 MiB per title.
+
+**PS1.** A VCD is a 1 MiB POPS header, every track file, and any pregap the
+conversion materialises for a CDRWIN-style sheet. All three terms count, and
+the middle one is the trap: a Redump split dump keeps each track in its own
+BIN, and reading only the file the first `FILE` line names misses the audio
+entirely. On a music-heavy title that is most of the disc.
+
+The predicted size is exact -- `demo-smoke.sh` installs a rip and compares the
+prediction against the bytes on disk.
+
+**Free space is not one number.** A PS2 title needs unallocated APA chunks. A
+PS1 title needs room inside `__.POPS`, which is a partition that already
+exists, so unallocated chunks are the wrong quantity in both directions: they
+say yes when `__.POPS` is full, and no when `__.POPS` has room but the drive
+has been fully partitioned -- which is the normal end state of a drive somebody
+has finished setting up. The two are checked separately, against pfsfuse's
+`statfs`, which reports PFS zone counts for real.
+
+---
+
 ## POPStarter and PS1 titles
 
 Layout on an APA HDD:

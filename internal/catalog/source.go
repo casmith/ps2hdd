@@ -181,17 +181,19 @@ func (s *Scanner) ScanPS1(ctx context.Context, root string) (ScanResult, error) 
 		// A single disc is carried through as a one-disc Game; Group below
 		// folds the discs of a release back together.
 		return model.Game{
-			Platform:   model.PlatformPS1,
-			Title:      d.Title,
-			GameID:     d.GameID,
-			SizeBytes:  d.SizeBytes,
-			SourcePath: d.SourcePath(),
+			Platform:         model.PlatformPS1,
+			Title:            d.Title,
+			GameID:           d.GameID,
+			SizeBytes:        d.SizeBytes,
+			InstallSizeBytes: d.VCDBytes,
+			SourcePath:       d.SourcePath(),
 			Discs: []model.Disc{{
-				Number:     d.DiscNumber,
-				GameID:     d.GameID,
-				Title:      d.Title,
-				SourcePath: d.SourcePath(),
-				SizeBytes:  d.SizeBytes,
+				Number:           d.DiscNumber,
+				GameID:           d.GameID,
+				Title:            d.Title,
+				SourcePath:       d.SourcePath(),
+				SizeBytes:        d.SizeBytes,
+				InstallSizeBytes: d.VCDBytes,
 			}},
 		}, nil
 	})
