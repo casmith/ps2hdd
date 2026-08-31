@@ -1,6 +1,7 @@
 package catalog
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -213,6 +214,74 @@ func (c Catalog) Find(query string) (matches []CatalogEntry) {
 		}
 	}
 	return matches
+}
+
+// FindSourceFile matches entries by the name of the file they were read from.
+//
+// A list of games is very often a directory listing -- `ls > wanted.txt` is the
+// obvious way to make one -- so the entries are filenames rather than titles.
+// Those do not match a title (the extension is not part of it) and do not look
+// like paths (there is no directory in them), which left the most natural way
+// to build a list failing on every line.
+//
+// Both the full filename and the name without its extension are accepted, so a
+// listing of .7z archives and one of .iso images both work.
+func (c Catalog) FindSourceFile(name string) (matches []CatalogEntry) {
+	want := strings.ToLower(strings.TrimSpace(name))
+	if want == "" {
+		return nil
+	}
+	wantBase := strings.TrimSuffix(want, filepath.Ext(want))
+	var loose []CatalogEntry
+	for _, e := range c.Entries {
+		exact, stripped := false, false
+		for _, src := range sourceFilesOf(e) {
+			base := strings.ToLower(filepath.Base(src))
+			if base == want {
+				exact = true
+				break
+			}
+			if strings.TrimSuffix(base, filepath.Ext(base)) == wantBase {
+				stripped = true
+			}
+		}
+		switch {
+		case exact:
+			matches = append(matches, e)
+		case stripped:
+			loose = append(loose, e)
+		}
+	}
+	// An exact filename wins outright. Ignoring extensions is what lets a
+	// listing be edited down to bare names, but it also makes "Game.7z" match
+	// a "Game.iso" sitting beside it, and calling that ambiguous would be
+	// pedantic when the query named one of them exactly.
+	if len(matches) > 0 {
+		return matches
+	}
+	return loose
+}
+
+// sourceFilesOf lists the files an entry could be named by: the title's own
+// source and each disc's, since a multi-disc PS1 release is several files and
+// naming any one of them means the release.
+func sourceFilesOf(e CatalogEntry) []string {
+	var out []string
+	add := func(g model.Game) {
+		if g.SourcePath != "" {
+			out = append(out, g.SourcePath)
+		}
+		for _, d := range g.Discs {
+			if d.SourcePath != "" {
+				out = append(out, d.SourcePath)
+			}
+		}
+	}
+	add(e.Game)
+	if e.SourceGame != nil {
+		add(*e.SourceGame)
+	}
+	return out
 }
 
 // Counts summarises a catalog for the status line.

@@ -204,3 +204,87 @@ func TestUncheckedArtworkIsNeitherCompleteNorMissing(t *testing.T) {
 		t.Errorf("a checked entry with a gap did not match the filter (%d)", got)
 	}
 }
+
+// A list of games is very often a directory listing -- `ls > wanted.txt` is the
+// obvious way to make one -- so its entries are filenames. Those match no title
+// (the extension is not part of one) and look like no path (they name no
+// directory), which left the most natural way to build a list failing on every
+// single line.
+func TestFindSourceFile(t *testing.T) {
+	c := catalog.Catalog{Entries: []catalog.CatalogEntry{
+		{Game: model.Game{
+			Title: "Ace Combat 04 - Shattered Skies (USA)", GameID: "SLUS_201.52",
+			SourcePath: "/roms/Ace Combat 04 - Shattered Skies (USA).7z",
+		}},
+		{Game: model.Game{
+			Title: "Ico (USA)", GameID: "SCUS_971.13",
+			SourcePath: "/roms/Ico (USA).iso",
+		}},
+	}}
+
+	cases := map[string]struct {
+		query string
+		want  string
+	}{
+		"the filename as listed": {"Ace Combat 04 - Shattered Skies (USA).7z", "SLUS_201.52"},
+		"case does not matter":   {"ace combat 04 - shattered skies (usa).7z", "SLUS_201.52"},
+		"surrounding space":      {"  Ico (USA).iso  ", "SCUS_971.13"},
+		"without the extension":  {"Ico (USA)", "SCUS_971.13"},
+		"a different extension":  {"Ico (USA).7z", "SCUS_971.13"},
+		"nothing of the sort":    {"Gran Turismo 4.iso", ""},
+		"empty":                  {"", ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := c.FindSourceFile(tc.query)
+			if tc.want == "" {
+				if len(got) != 0 {
+					t.Fatalf("got %d matches, want none", len(got))
+				}
+				return
+			}
+			if len(got) != 1 {
+				t.Fatalf("got %d matches, want 1", len(got))
+			}
+			if got[0].GameID != tc.want {
+				t.Errorf("matched %s, want %s", got[0].GameID, tc.want)
+			}
+		})
+	}
+}
+
+// Two files whose names differ only by extension both answer to the stripped
+// name, but naming one of them exactly is not ambiguous.
+func TestFindSourceFilePrefersAnExactName(t *testing.T) {
+	c := catalog.Catalog{Entries: []catalog.CatalogEntry{
+		{Game: model.Game{GameID: "SLUS_000.01", SourcePath: "/roms/Game.7z"}},
+		{Game: model.Game{GameID: "SLUS_000.02", SourcePath: "/roms/Game.iso"}},
+	}}
+	got := c.FindSourceFile("Game.iso")
+	if len(got) != 1 || got[0].GameID != "SLUS_000.02" {
+		t.Fatalf("an exact filename did not win outright: %+v", got)
+	}
+	// The bare name really does name both, and saying so beats picking one.
+	if got := c.FindSourceFile("Game"); len(got) != 2 {
+		t.Errorf("got %d matches for an ambiguous bare name, want 2", len(got))
+	}
+}
+
+// Naming any disc of a multi-disc release means the release, since a listing
+// has one line per file and the discs are separate files.
+func TestFindSourceFileMatchesAnyDisc(t *testing.T) {
+	c := catalog.Catalog{Entries: []catalog.CatalogEntry{
+		{Game: model.Game{
+			Title: "Final Fantasy VII", GameID: "SCUS_941.63",
+			Discs: []model.Disc{
+				{Number: 1, SourcePath: "/roms/FF7 Disc 1.cue"},
+				{Number: 2, SourcePath: "/roms/FF7 Disc 2.cue"},
+			},
+		}},
+	}}
+	for _, q := range []string{"FF7 Disc 1.cue", "FF7 Disc 2.cue"} {
+		if got := c.FindSourceFile(q); len(got) != 1 {
+			t.Errorf("%q matched %d entries, want the release", q, len(got))
+		}
+	}
+}

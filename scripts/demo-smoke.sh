@@ -107,6 +107,13 @@ grep -q "2 already installed" "$WORK/list-plan.txt" \
   || fail "installed titles were counted into the plan"
 grep -q "PlayStation 2" "$WORK/list-plan.txt" || fail "the list plan omitted PS2"
 grep -q "PlayStation 1" "$WORK/list-plan.txt" || fail "the list plan omitted PS1"
+# A list is very often a directory listing, so filenames have to resolve too --
+# they match no title (the extension is not part of one) and look like no path.
+(cd "$DEMO/sources/ps2" && ls *.iso) > "$WORK/by-filename.txt"
+ps2hdd install --from-list "$WORK/by-filename.txt" --ps2 --dry-run > "$WORK/fn-plan.txt" 2>&1
+grep -q "could not be resolved" "$WORK/fn-plan.txt" \
+  && fail "a directory listing did not resolve: $(cat "$WORK/fn-plan.txt")" || true
+grep -q "PlayStation 2" "$WORK/fn-plan.txt" || fail "the filename plan covered nothing"
 # A line that resolves to nothing stops the whole plan, by line number: a typo
 # that silently dropped one game from a long list would be found much later.
 printf 'Gran Turismo 4\nGrand Turismo 5\n' > "$WORK/typo.txt"

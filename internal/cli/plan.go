@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -91,15 +92,38 @@ func resolveListEntry(env *Env, ctx context.Context, c catalog.Catalog, query st
 			return g, installedInCatalog(c, g.GameID), nil
 		}
 	}
+	// A filename is tried before a title. A list is very often a directory
+	// listing, and "Ace Combat 04 (USA).7z" is neither a title -- the
+	// extension is not part of one -- nor a path, since it names no directory.
+	if m := c.FindSourceFile(query); len(m) == 1 {
+		return sourceView(m[0]), m[0].Installed, nil
+	} else if len(m) > 1 {
+		return model.Game{}, false, ambiguous(query, m)
+	}
 	e, err := resolveSourceEntry(c, query)
 	if err != nil {
 		return model.Game{}, false, err
 	}
-	g := e.Game
+	return sourceView(e), e.Installed, nil
+}
+
+// sourceView is the side of an entry an install acts on: the image path rather
+// than the partition.
+func sourceView(e catalog.CatalogEntry) model.Game {
 	if e.SourceGame != nil {
-		g = *e.SourceGame
+		return *e.SourceGame
 	}
-	return g, e.Installed, nil
+	return e.Game
+}
+
+// ambiguous reports a query that names more than one title.
+func ambiguous(query string, matches []catalog.CatalogEntry) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "%q matches %d source games:", query, len(matches))
+	for _, m := range matches {
+		fmt.Fprintf(&b, "\n      %-4s %-14s %s", m.Platform.Label(), m.GameID, m.Title)
+	}
+	return errors.New(b.String())
 }
 
 // installedInCatalog reports whether a serial is already on the drive.
