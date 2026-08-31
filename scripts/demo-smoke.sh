@@ -70,6 +70,12 @@ step "installing the same title twice is refused"
 # purpose, and pipefail would turn a correct refusal into a script failure.
 ps2hdd install "$DEMO/sources/ps2/Shadow of the Colossus.iso" > "$WORK/dup.txt" 2>&1 || true
 grep -qi "already installed" "$WORK/dup.txt" || fail "a duplicate install was not refused"
+# And on the PS1 side, which reads a different library to answer the same
+# question -- a second copy of a game would otherwise fill __.POPS.
+ps2hdd install "$DEMO/sources/psx/Castlevania - Symphony of the Night/Castlevania - Symphony of the Night.cue" \
+  > "$WORK/dup-ps1.txt" 2>&1 || true
+grep -qi "already installed" "$WORK/dup-ps1.txt" \
+  || fail "a duplicate PS1 install was not refused: $(cat "$WORK/dup-ps1.txt")"
 
 step "--all plans the whole library without writing"
 ps2hdd install --all --dry-run > "$WORK/plan.txt" 2>&1
@@ -127,6 +133,20 @@ ps2hdd install --all --ps2 > "$WORK/batch.txt" 2>&1 || true
 grep -q "Installed" "$WORK/batch.txt" || fail "the batch installed nothing: $(cat "$WORK/batch.txt")"
 ps2hdd list --ps2 --installed --no-artwork > "$WORK/after-batch.txt"
 grep -q "Gran Turismo 4" "$WORK/after-batch.txt" || fail "a planned title was not installed"
+
+step "a PS2 batch never mounts the PS1 partition"
+# Game.Key is prefixed with the platform, so a PS2 title cannot match a PS1
+# entry -- and reading the PS1 library means a pfsfuse mount of __.POPS. That
+# mount used to happen once per title, which is what this guards against
+# coming back: the count must not grow with the batch.
+for g in "Gran Turismo 4" "Ridge Racer V" "Shadow of the Colossus" "Burnout 3 Takedown"; do
+  ps2hdd remove "$g" >/dev/null 2>&1 || true
+done
+"$BIN" --demo --no-color --yes --debug install --all --ps2 > "$WORK/mounts.txt" 2>&1 || true
+pops=$(grep -c 'mounted PFS partition.*__\.POPS' "$WORK/mounts.txt" || true)
+# One mount and one unmount for the catalog build, and nothing per title.
+[ "$pops" -le 2 ] \
+  || fail "__.POPS was mounted $pops times during a PS2-only batch; it should not scale with the batch"
 
 step "a failing title does not stop the batch"
 ps2hdd remove "Gran Turismo 4"

@@ -51,7 +51,16 @@ func (r InstalledReader) PS2Games(ctx context.Context) ([]model.Game, error) {
 	if err != nil {
 		return nil, err
 	}
+	return PS2GamesFrom(infos), nil
+}
 
+// PS2GamesFrom turns hdl_dump's game descriptors into catalog entries.
+//
+// It is separate from the read so that a caller who already has the partition
+// table in hand -- the install path reads it once for both of its pre-write
+// checks -- gets the same entries rather than a second, subtly different
+// mapping of its own.
+func PS2GamesFrom(infos []apa.GameInfo) []model.Game {
 	games := make([]model.Game, 0, len(infos))
 	for _, g := range infos {
 		media := model.MediaCD
@@ -84,7 +93,7 @@ func (r InstalledReader) PS2Games(ctx context.Context) ([]model.Game, error) {
 		})
 	}
 	model.SortGames(games)
-	return games, nil
+	return games
 }
 
 // PS1Games lists the installed POPStarter titles.

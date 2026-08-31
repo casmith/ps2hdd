@@ -257,10 +257,18 @@ func (s *Services) installPS2(ctx context.Context, g model.Game, opts InstallOpt
 	if err != nil {
 		return rep, err
 	}
-	if err := s.ensureNotInstalled(ctx, g); err != nil {
+	// Both pre-write checks are questions about the partition table, asked
+	// microseconds apart about a disk that cannot change between them, so they
+	// share one read of it. Reading it twice was a round trip per partition
+	// twice over, on a bus where the seek is the cost.
+	toc, installed, err := s.readPS2Table(t)
+	if err != nil {
 		return rep, err
 	}
-	if err := s.ensurePS2Space(ctx, g); err != nil {
+	if err := ensureNotInstalledIn(installed, g); err != nil {
+		return rep, err
+	}
+	if err := ensurePS2SpaceIn(ctx, toc, g); err != nil {
 		return rep, err
 	}
 	if g.Media == model.MediaUnknown {
@@ -372,13 +380,33 @@ func (s *Services) verifyPS2Installed(ctx context.Context, g model.Game) error {
 	return fmt.Errorf("verification failed: %s (%s) is not in the HDD's partition table after installing", g.Title, g.GameID)
 }
 
+// ensureNotInstalled refuses a title that is already on the drive.
+//
+// It reads only the platform being installed. Game.Key is prefixed with the
+// platform, so a PS2 title can never match a PS1 entry and looking at the other
+// library is a comparison that cannot succeed -- which mattered because the
+// PS1 half means mounting __.POPS over pfsfuse. Every PS2 install was spawning
+// a FUSE mount, scanning a partition and unmounting it to answer a question
+// about the APA table.
 func (s *Services) ensureNotInstalled(ctx context.Context, g model.Game) error {
-	installed, err := s.Installed(ctx)
+	var installed []model.Game
+	var err error
+	if g.Platform == model.PlatformPS1 {
+		installed, err = s.InstalledPS1(ctx)
+	} else {
+		installed, err = s.InstalledPS2(ctx)
+	}
 	if err != nil {
 		// If the installed list cannot be read the install must not proceed:
 		// writing a duplicate partition is worse than refusing.
 		return fmt.Errorf("could not read the installed library: %w", err)
 	}
+	return ensureNotInstalledIn(installed, g)
+}
+
+// ensureNotInstalledIn is the comparison itself, against a list the caller has
+// already read.
+func ensureNotInstalledIn(installed []model.Game, g model.Game) error {
 	want := g.Key()
 	for _, got := range installed {
 		if got.Key() == want {
@@ -388,26 +416,33 @@ func (s *Services) ensureNotInstalled(ctx context.Context, g model.Game) error {
 	return nil
 }
 
+// readPS2Table reads the partition table once and returns both what a caller
+// needs from it: the table for the space check, and the games for the
+// duplicate check.
+func (s *Services) readPS2Table(t *drive.Target) (*apa.TOC, []model.Game, error) {
+	f, err := os.Open(t.Path)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer f.Close()
+	toc, err := apa.ReadTOC(f, t.SizeBytes)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not read the partition table: %w", err)
+	}
+	infos, err := apa.ReadGames(f, toc)
+	if err != nil {
+		return nil, nil, fmt.Errorf("could not read the installed library: %w", err)
+	}
+	return toc, catalog.PS2GamesFrom(infos), nil
+}
+
 // ensurePS2Space checks a title against the drive's unallocated APA chunks.
 //
 // What a title costs is decided by hdl_dump, and it is neither the image's
 // size nor the image rounded up to a chunk: partition overhead is charged on
 // top and can take another whole one. Rather than approximate that, the real
 // partition table is read and the allocation is replayed against it.
-func (s *Services) ensurePS2Space(ctx context.Context, g model.Game) error {
-	t, err := s.Target(ctx, false)
-	if err != nil {
-		return err
-	}
-	f, err := os.Open(t.Path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	toc, err := apa.ReadTOC(f, t.SizeBytes)
-	if err != nil {
-		return err
-	}
+func ensurePS2SpaceIn(ctx context.Context, toc *apa.TOC, g model.Game) error {
 	needed, ok := toc.AllocationFor(g.SizeBytes)
 	if !ok {
 		_, _, free := toc.Chunks()
