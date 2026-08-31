@@ -79,8 +79,12 @@ type InstallReport struct {
 	// Files lists paths written on the HDD, for the PS1 path.
 	Files []string `json:"files,omitempty"`
 	// AssetsInstalled counts artwork files copied after the install.
-	AssetsInstalled int  `json:"assets_installed,omitempty"`
-	DryRun          bool `json:"dry_run,omitempty"`
+	AssetsInstalled int `json:"assets_installed,omitempty"`
+	// Warnings records what did not go fully to plan without failing the
+	// install: a game on the disk that the console will not list is still
+	// worth reporting, and is exactly the case that used to pass silently.
+	Warnings []string `json:"warnings,omitempty"`
+	DryRun   bool     `json:"dry_run,omitempty"`
 }
 
 // InspectSource identifies an arbitrary image path and returns the title it
@@ -362,6 +366,35 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 		dir := ps1.DiscsDirName(g.Discs[0].GameID, g.Title)
 		rep.Files = append(rep.Files, ps1.POPSPartition+"/"+dir+"/"+ps1.DiscsFile)
 	}
+
+	// The VCD alone is not a playable game: OPL has no PS1 support at all, so
+	// without a launcher in +OPL/APPS the title exists on the disk and appears
+	// in no menu. See internal/platform/ps1/launcher.go.
+	//
+	// A multi-disc title gets one launcher, pointing at disc 1; POPStarter
+	// swaps to the rest through DISCS.TXT.
+	launcherELF := ps1.LauncherELFName(names[0])
+	launcherDir := drive.PartitionOPL + "/" + ps1.AppsDir + "/" + ps1.LauncherDirName(names[0])
+	// When the runtime could not be inspected, "missing" and "unknown" are the
+	// same value, so the launcher is planned and skipped later if it turns out
+	// there was nothing to copy.
+	wantLauncher := !ready.RuntimeChecked || ready.Runtime[ps1.POPStarterELF]
+	if wantLauncher {
+		rep.Files = append(rep.Files, launcherDir+"/"+launcherELF, launcherDir+"/"+ps1.TitleConfigFile)
+	} else {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+			"%s is not in %s/%s, so no launcher was written and OPL will not list this game. "+
+				"Import the runtime with `ps2hdd setup ps1 --import <dir>`, then run "+
+				"`ps2hdd setup ps1 --launchers`; the game itself does not need reinstalling.",
+			ps1.POPStarterELF, ps1.CommonPartition, ps1.POPSDir))
+	}
+	if !ps1.BootNameFitsOPL(launcherELF) {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+			"%q is longer than the 64 characters OPL allows for a boot filename, so the entry "+
+				"will appear on its Apps page and do nothing. Launch it from wLaunchELF instead, "+
+				"or reinstall under a shorter title.", launcherELF))
+	}
+
 	if s.DryRun {
 		return rep, nil
 	}
@@ -434,7 +467,7 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 				return fmt.Errorf("create the disc-swap directory: %w", err)
 			}
 			body := ps1.DiscsFileContents(names)
-			if err := os.WriteFile(filepath.Join(dir, ps1.DiscsFile), []byte(body), 0o644); err != nil {
+			if err := writeFile(filepath.Join(dir, ps1.DiscsFile), []byte(body)); err != nil {
 				return fmt.Errorf("write %s: %w", ps1.DiscsFile, err)
 			}
 		}
@@ -442,6 +475,17 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	})
 	if err != nil {
 		return rep, err
+	}
+	if wantLauncher {
+		if err := s.installPS1Launcher(ctx, m, g, names[0], staging); err != nil {
+			// The discs are already installed and are not made worse by this.
+			// Failing the whole install here would strand them; saying so
+			// plainly leaves a state the user can fix and rerun.
+			log.Warn("could not write the POPStarter launcher", "title", g.Title, "err", err)
+			rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+				"the game is installed but its launcher could not be written, so OPL will not "+
+					"list it: %s", firstLine(err.Error())))
+		}
 	}
 	log.Info("installed PS1 game", "title", g.Title, "discs", total)
 
@@ -461,6 +505,87 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	}
 	opts.OnProgress.report(StageComplete, 1, g.Title)
 	return rep, nil
+}
+
+// installPS1Launcher writes the one thing that makes an installed PS1 title
+// selectable on the console: a copy of POPSTARTER.ELF renamed after the VCD,
+// in its own directory under +OPL/APPS, next to a title.cfg naming it.
+//
+// POPStarter finds its VCD by reading its own filename, and OPL finds the ELF
+// by reading title.cfg, so neither file is optional and neither name is a
+// choice. internal/platform/ps1/launcher.go has the details and the citations.
+func (s *Services) installPS1Launcher(ctx context.Context, m *drive.MountManager, g model.Game, vcdName, staging string) error {
+	local, err := fetchPOPStarter(ctx, m, staging)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(local)
+	return m.With(ctx, drive.PartitionOPL, func(mp string) error {
+		return writeLauncher(ctx, mp, local, vcdName, g.Title)
+	})
+}
+
+// fetchPOPStarter copies POPSTARTER.ELF off the HDD into staging.
+//
+// It is taken from the runtime already on the disk rather than carried by
+// ps2hdd, which keeps one copy authoritative: whichever POPStarter build the
+// user installed is the one every launcher runs. The round trip through
+// staging is because __common and +OPL cannot be read and written through one
+// mount -- the mount manager holds one mountpoint per partition.
+func fetchPOPStarter(ctx context.Context, m *drive.MountManager, staging string) (string, error) {
+	local := filepath.Join(staging, ps1.POPStarterELF)
+	err := m.With(ctx, ps1.CommonPartition, func(mp string) error {
+		return copyFile(filepath.Join(mp, ps1.POPSDir, ps1.POPStarterELF), local)
+	})
+	if err != nil {
+		return "", fmt.Errorf("read %s from %s: %w", ps1.POPStarterELF, ps1.CommonPartition, err)
+	}
+	return local, nil
+}
+
+// writeLauncher creates one title's launcher directory inside a mounted +OPL.
+func writeLauncher(ctx context.Context, oplMount, popstarter, vcdName, title string) error {
+	elf := ps1.LauncherELFName(vcdName)
+	dir := filepath.Join(oplMount, ps1.AppsDir, ps1.LauncherDirName(vcdName))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return fmt.Errorf("create the launcher directory: %w", err)
+	}
+	if err := copyFile(popstarter, filepath.Join(dir, elf)); err != nil {
+		return fmt.Errorf("copy %s: %w", elf, err)
+	}
+	body := ps1.TitleConfigContents(ps1.LauncherTitle(title), elf)
+	if err := writeFile(filepath.Join(dir, ps1.TitleConfigFile), []byte(body)); err != nil {
+		return fmt.Errorf("write %s: %w", ps1.TitleConfigFile, err)
+	}
+	logging.ContextLogger(ctx).Info("wrote POPStarter launcher",
+		"title", title, "dir", ps1.LauncherDirName(vcdName), "boot", elf)
+	return nil
+}
+
+// writeFile is os.WriteFile without the O_TRUNC. Every caller writes onto a
+// PFS mount, where truncating an existing file fails; see internal/pfs.
+func writeFile(path string, body []byte) error {
+	f, err := pfs.Create(path, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(body)
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		os.Remove(path)
+	}
+	return err
+}
+
+// firstLine keeps a warning to one line; a wrapped error chain reads badly
+// inside a sentence.
+func firstLine(s string) string {
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // discFraction maps a per-disc fraction onto the whole title's progress.

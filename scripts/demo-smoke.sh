@@ -86,6 +86,37 @@ grep -q "SLUS_007.76" "$WORK/mgs.txt" || fail "disc 2 serial lost"
 test -f "$DEMO/partitions/pops/SLUS_005.94.Metal Gear Solid/DISCS.TXT" \
   || fail "DISCS.TXT was not written"
 
+step "the PS1 title got a launcher OPL can list"
+# OPL has no PS1 support of its own: without this directory the game is on the
+# disk, verified, and in no menu. The launcher points at disc 1; POPStarter
+# swaps to disc 2 itself through DISCS.TXT.
+LAUNCHER="$DEMO/partitions/plus-opl/APPS/SLUS_005.94.Metal Gear Solid_CD1"
+test -f "$LAUNCHER/SLUS_005.94.Metal Gear Solid_CD1.ELF" \
+  || fail "no POPStarter launcher was written"
+test -f "$LAUNCHER/title.cfg" || fail "no title.cfg was written"
+# OPL drops an entry that lacks either key, silently.
+grep -q "^title=" "$LAUNCHER/title.cfg" || fail "title.cfg has no title key"
+grep -q "^boot=SLUS_005.94.Metal Gear Solid_CD1.ELF$" "$LAUNCHER/title.cfg" \
+  || fail "title.cfg does not boot the launcher beside it"
+# The ELF is the POPStarter binary itself, not a stub.
+cmp -s "$LAUNCHER/SLUS_005.94.Metal Gear Solid_CD1.ELF" \
+  "$DEMO/partitions/common/POPS/POPSTARTER.ELF" \
+  || fail "the launcher is not a copy of POPSTARTER.ELF"
+
+step "doctor reports a title whose launcher is missing"
+rm -rf "$LAUNCHER"
+ps2hdd doctor > "$WORK/doctor-launchers.txt" 2>&1 || true
+grep -q "no POPStarter launcher" "$WORK/doctor-launchers.txt" \
+  || fail "doctor did not notice the missing launcher"
+
+step "setup ps1 --launchers writes it back"
+ps2hdd setup ps1 --launchers | tee "$WORK/launchers.txt"
+grep -q "Metal Gear Solid" "$WORK/launchers.txt" || fail "the launcher was not repaired"
+test -f "$LAUNCHER/title.cfg" || fail "title.cfg was not restored"
+ps2hdd doctor > "$WORK/doctor-after.txt" 2>&1 || true
+grep -q "no POPStarter launcher" "$WORK/doctor-after.txt" \
+  && fail "doctor still reports a launcher it just wrote" || true
+
 step "artwork sync"
 ps2hdd art sync --all | tee "$WORK/art.txt"
 ps2hdd art status | tee "$WORK/artstatus.txt"
@@ -119,6 +150,9 @@ grep -q "Metal Gear Solid" "$WORK/after-ps1-remove.txt" \
 ls "$DEMO/partitions/pops/" > "$WORK/pops-after.txt"
 grep -q "Metal Gear" "$WORK/pops-after.txt" \
   && fail "a VCD survived removal" || true
+# The launcher lives on a different partition from the VCD, so removing only
+# __.POPS would leave an Apps entry that boots nothing.
+test -e "$LAUNCHER" && fail "the launcher survived removal" || true
 
 step "remove the PS2 title"
 ps2hdd remove SCUS_974.72

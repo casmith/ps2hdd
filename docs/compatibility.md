@@ -217,7 +217,45 @@ hdd0:__common/POPS/POPS.ELF          Sony, user-supplied
 hdd0:__common/POPS/IOPRP252.IMG      Sony, user-supplied
 hdd0:__common/POPS/POPSTARTER.ELF    POPStarter release
 hdd0:__.POPS/<serial>.<title>.VCD
+hdd0:+OPL/APPS/<serial>.<title>/<serial>.<title>.ELF   copy of POPSTARTER.ELF
+hdd0:+OPL/APPS/<serial>.<title>/title.cfg
 ```
+
+**Open PS2 Loader has no PlayStation 1 support at all.** Not a partial one, not
+one that needs enabling: there is no reference to POPS, POPSTARTER or `.VCD`
+anywhere in its source, and `src/hddsupport.c` knows only about HDLoader
+partitions. A VCD in `__.POPS` is data. It appears in no menu, on any build.
+
+What appears in a menu is a copy of `POPSTARTER.ELF` renamed after the VCD.
+POPStarter reads its own filename to decide which VCD to mount, so the two
+names must match apart from the extension. OPL finds that ELF through its Apps
+page, and the rules there are exact (`src/opl.c:505,550`):
+
+- `oplScanApps` lists `<prefix>APPS` for every enabled device. On HDD the
+  prefix is the partition named by `hdd_partition` in `conf_hdd.cfg`, which OPL
+  writes as `+OPL` itself (`src/hddsupport.c:148`).
+- Only subdirectories are scanned. An ELF sitting loose in `APPS` is skipped.
+- Each subdirectory needs a `title.cfg` giving **both** `title` and `boot`.
+  Missing either drops the entry with nothing on screen to say so
+  (`src/appsupport.c:202`).
+
+Every one of those failures is silent, which is why `install` writes all three
+pieces and `doctor` checks them afterwards. `ps2hdd setup ps1 --launchers`
+fills in launchers for titles installed before this existed, or by another
+tool.
+
+The directory is named after the VCD rather than the title so that two releases
+of one game cannot collide, and so the correspondence with `__.POPS` is visible
+to anyone browsing the disk. A multi-disc title gets one launcher, pointing at
+disc 1; POPStarter swaps to the rest through `DISCS.TXT`.
+
+**OPL truncates a boot filename at 64 characters** (`APP_BOOT_MAX`), then
+launches `<path>/<boot>` (`src/appsupport.c:222,447`) — so a longer name
+becomes a path that does not exist, and the entry appears on the Apps page and
+does nothing. POPStarter's own limit is 89, so the two really can disagree.
+ps2hdd keeps the 89-character VCD name, since shortening it would put ps2hdd's
+filenames at odds with every other tool, and warns instead. Those titles still
+launch from wLaunchELF.
 
 Multi-disc titles use a `_CD<n>` suffix and a `DISCS.TXT` listing the discs in
 order, in a directory named after the title's base VCD name:

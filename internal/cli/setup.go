@@ -40,6 +40,7 @@ missing.`,
 func newSetupPS1Command(env *Env) *cobra.Command {
 	var importDir string
 	var createPOPS string
+	var launchers bool
 	cmd := &cobra.Command{
 		Use:   "ps1",
 		Short: "Check PS1/POPStarter support and import runtime files",
@@ -67,6 +68,17 @@ image, so budget around 750 MB per disc. APA allocates in 128 MiB units, so the
 size must be a multiple of that; every whole number of gigabytes is. Growing the
 partition afterwards needs a PS2-side tool, so err large.
 
+--launchers writes the missing POPStarter launchers for PS1 games that are
+already installed:
+
+  ps2hdd setup ps1 --launchers
+
+OPL has no PS1 support of its own, so a VCD in __.POPS appears in no menu. What
+appears is a copy of POPSTARTER.ELF renamed after the VCD, in its own directory
+under +OPL/APPS with a title.cfg beside it. Titles installed before ps2hdd
+wrote those, or installed by another tool, need them filled in once. Titles
+that already have a launcher are left alone.
+
 The allocation itself is done by pfsshell, not by ps2hdd, for the same reason
 installs go through hdl_dump: the reference implementation decides how APA
 space is laid out. ps2hdd confirms the result by reading the partition table
@@ -75,6 +87,11 @@ back afterwards.`,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if createPOPS != "" {
 				if err := createPOPSPartition(env, cmd, createPOPS); err != nil {
+					return err
+				}
+			}
+			if launchers {
+				if err := repairLaunchers(env, cmd); err != nil {
 					return err
 				}
 			}
@@ -132,7 +149,30 @@ back afterwards.`,
 	cmd.Flags().StringVar(&importDir, "import", "", "copy POPS runtime files from this directory onto the HDD")
 	cmd.Flags().StringVar(&createPOPS, "create-pops", "",
 		"create the __.POPS partition at this size (e.g. 20G) before checking readiness")
+	cmd.Flags().BoolVar(&launchers, "launchers", false,
+		"write POPStarter launchers for installed PS1 games that have none")
 	return cmd
+}
+
+// repairLaunchers runs the launcher half of `setup ps1`.
+func repairLaunchers(env *Env, cmd *cobra.Command) error {
+	fixed, err := env.Svc.RepairPS1Launchers(cmd.Context())
+	if err != nil {
+		return err
+	}
+	verb := "Wrote a launcher for"
+	if env.Svc.DryRun {
+		verb = "Would write a launcher for"
+	}
+	if len(fixed) == 0 {
+		env.printf("%s\n", dim("Every installed PS1 game already has a launcher."))
+		return nil
+	}
+	section(env.Out, "Launchers")
+	for _, t := range fixed {
+		env.printf("  %s %s\n", dim(verb), t)
+	}
+	return nil
 }
 
 // createPOPSPartition runs the partition creation half of `setup ps1`.

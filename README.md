@@ -286,6 +286,20 @@ ps2hdd setup ps1 --import ~/pops-files # copy in your own runtime files
 Only files matching the documented runtime are copied; anything else in that
 directory is listed and left alone.
 
+**A VCD on the disk is not yet a game you can start.** Open PS2 Loader has no
+PS1 support at all — there is no reference to POPS or `.VCD` anywhere in its
+source — so what puts a title in a menu is a copy of `POPSTARTER.ELF` renamed
+after the VCD, in its own directory under `+OPL/APPS` with a `title.cfg` beside
+it. `install` writes all three, `doctor` reports any title that lacks them, and
+
+```sh
+ps2hdd setup ps1 --launchers           # write the launchers that are missing
+```
+
+fills in titles installed before this existed, or by another tool. Titles that
+already have one are left alone. See [docs/compatibility.md](docs/compatibility.md)
+for the exact rules OPL applies, all of which fail silently.
+
 `--create-pops` sizes the partition for the library you intend to keep — a VCD
 is a raw 2352-bytes-per-sector image, so budget around 750 MB per disc, and err
 large, because growing it afterwards needs a PS2-side tool. The allocation is
@@ -327,8 +341,9 @@ Needs `7z` on PATH; `ps2hdd doctor` says whether it is there.
 
 Installing a PS1 game converts the rip to POPS's VCD format — built in, and
 verified byte-for-byte against `cue2pops` v2.0 by the test suite — and copies
-it into `__.POPS`. Multi-disc titles get a `DISCS.TXT` so POPStarter can swap
-discs in game.
+it into `__.POPS`, then writes the POPStarter launcher that makes it appear in
+OPL. Multi-disc titles get a `DISCS.TXT` so POPStarter can swap discs in game,
+and one launcher pointing at disc 1.
 
 The rip must be `MODE2/2352`. 2048-byte MODE1 images are refused with an
 explanation rather than converted into something that would not boot.

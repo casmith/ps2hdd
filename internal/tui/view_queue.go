@@ -83,6 +83,10 @@ func (m *Model) renderQueue() string {
 			b.WriteString(components.StyleMuted.Render(strings.Repeat("░", barWidth) + "  Waiting"))
 		case app.QueueComplete:
 			b.WriteString(components.Bar(barWidth, 1) + "  " + components.StyleSuccess.Render("Complete"))
+			for _, w := range it.Warnings {
+				b.WriteString("\n   " + components.StyleWarning.Render("! ") +
+					components.StyleMuted.Render(components.Truncate(firstLine(w), m.contentWidth()-8)))
+			}
 		case app.QueueFailed:
 			b.WriteString(components.StyleDanger.Render("Failed") + "  " +
 				components.StyleMuted.Render(components.Truncate(firstLine(it.Err), m.contentWidth()-12)))

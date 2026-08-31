@@ -57,11 +57,15 @@ type QueueItem struct {
 	Game  model.Game `json:"game"`
 	State QueueState `json:"state"`
 	// Progress is 0..1, or negative when the current stage reports none.
-	Progress   float64   `json:"progress"`
-	StatusText string    `json:"status_text"`
-	Err        string    `json:"error,omitempty"`
-	Started    time.Time `json:"started,omitempty"`
-	Finished   time.Time `json:"finished,omitempty"`
+	Progress   float64 `json:"progress"`
+	StatusText string  `json:"status_text"`
+	Err        string  `json:"error,omitempty"`
+	// Warnings carries what the install completed in spite of. A PS1 game
+	// that installed cleanly but is not listable by the console is a success
+	// with a caveat, and the caveat is the whole point of noticing it.
+	Warnings []string  `json:"warnings,omitempty"`
+	Started  time.Time `json:"started,omitempty"`
+	Finished time.Time `json:"finished,omitempty"`
 }
 
 // Queue runs installs one at a time.
@@ -287,9 +291,10 @@ func (q *Queue) process(ctx context.Context, it *QueueItem) {
 		})
 	}
 
-	_, err := q.svc.Install(ctx, it.Game, opts)
+	rep, err := q.svc.Install(ctx, it.Game, opts)
 	q.update(it, func(i *QueueItem) {
 		i.Finished = time.Now()
+		i.Warnings = rep.Warnings
 		switch {
 		case err == nil:
 			i.State = QueueComplete
