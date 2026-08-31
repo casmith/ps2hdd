@@ -67,6 +67,9 @@ type InstallOptions struct {
 	Hidden bool
 	// SyncAssets fetches artwork after a successful install.
 	SyncAssets bool
+	// Prefetch supplies titles unpacked ahead of this one. Nil means extract
+	// inline, which is what a single install does.
+	Prefetch *Prefetcher
 	// Widescreen turns on POPStarter's GTE widescreen hack for a PS1 title by
 	// writing $WIDESCREEN into its CHEATS.TXT. Off unless asked for: it does
 	// not correct HUDs or 2D art, and some games do not survive it.
@@ -288,6 +291,10 @@ func (s *Services) installPS2(ctx context.Context, g model.Game, opts InstallOpt
 					source = filepath.Join("<scratch>", filepath.Base(cue))
 				}
 			}
+		} else if pre, ok := opts.Prefetch.Take(ctx, g); ok {
+			// Unpacked while the previous title was being written.
+			defer pre.Release()
+			source = pre.Path
 		} else {
 			extracted, cleanup, err := s.extractSource(ctx, g, opts)
 			if err != nil {
@@ -564,12 +571,17 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	// An archived rip has to become real files before it can be converted:
 	// the converter reads the cuesheet and seeks around the data track.
 	if g.ArchiveMember != "" {
-		discs, cleanup, err := s.extractPS1Source(ctx, g, opts)
-		if err != nil {
-			return rep, err
+		if pre, ok := opts.Prefetch.Take(ctx, g); ok {
+			defer pre.Release()
+			g.Discs = pre.Discs
+		} else {
+			discs, cleanup, err := s.extractPS1Source(ctx, g, opts)
+			if err != nil {
+				return rep, err
+			}
+			defer cleanup()
+			g.Discs = discs
 		}
-		defer cleanup()
-		g.Discs = discs
 	}
 
 	// Conversion staging goes in the scratch directory, not the system

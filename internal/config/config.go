@@ -48,6 +48,15 @@ type InstallConfig struct {
 	// install, and the setting can be changed afterwards by editing one
 	// CHEATS.TXT rather than reinstalling.
 	Widescreen bool `toml:"widescreen" json:"widescreen"`
+	// Prefetch is how many archived titles may be unpacked at once during a
+	// bulk install, counting the one being written. 2 unpacks the next while
+	// the current one is injected, which is what hides the decompression
+	// behind the write; 1 or 0 disables it.
+	//
+	// It is a disk budget more than a thread count. Each unpacked title is up
+	// to 4.7 GB in install.scratch_dir, so raising it costs that much space
+	// per extra slot and buys nothing once the writer never waits.
+	Prefetch int `toml:"prefetch" json:"prefetch"`
 	// ScratchDir is where an archived image is decompressed before it is
 	// injected. Empty means the cache directory.
 	//
@@ -120,7 +129,7 @@ type TUIConfig struct {
 // permanently incomplete, so the defaults are chosen to be satisfiable.
 func Default() Config {
 	return Config{
-		Install: InstallConfig{SyncAssets: true, VerifyAfterInstall: true},
+		Install: InstallConfig{SyncAssets: true, VerifyAfterInstall: true, Prefetch: 2},
 		Assets: AssetsConfig{
 			// opl-art is the default because it is the only source that can
 			// satisfy the slots enabled here. A default configuration that

@@ -11,6 +11,7 @@
 package demo
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -32,6 +33,10 @@ type Env struct {
 	Root string
 	// Image is the synthetic APA disk image, used as the configured device.
 	Image string
+
+	// real runs the commands worth running for real -- 7z, which only reads
+	// the source library and writes into scratch.
+	real external.Runner
 
 	mu   sync.Mutex
 	disk apasynth.Disk
@@ -57,6 +62,7 @@ func Setup(root string) (*Env, error) {
 		Image:      filepath.Join(root, "ps2hdd-demo.img"),
 		disk:       apasynth.DefaultDisk(),
 		partitions: map[string]string{},
+		real:       &external.ExecRunner{},
 	}
 	// A demo that resets on every command would be misleading: installing a
 	// game and then listing the library must show what the first command did.
@@ -327,6 +333,7 @@ func writeSparse(path string, data []byte) error {
 const failEnv = "PS2HDD_DEMO_FAIL"
 
 func (e *Env) handle(c external.Command) (external.Result, error) {
+	ctx := context.Background()
 	if want := os.Getenv(failEnv); want != "" && c.Name == external.HDLDumpTool {
 		for _, a := range c.Args {
 			if strings.Contains(a, want) {
@@ -342,6 +349,12 @@ func (e *Env) handle(c external.Command) (external.Result, error) {
 		return external.Result{}, e.unmount(c.Args)
 	case external.HDLDumpTool:
 		return e.hdlDump(c)
+	case external.SevenZipTool, external.SevenZipAltTool:
+		// Archives are the one thing worth doing for real. 7z only reads the
+		// source library and writes into scratch -- it never touches the
+		// synthetic drive -- so faking it would remove the coverage without
+		// removing any risk, and the archive paths would go untested.
+		return e.real.Run(ctx, c)
 	case "lsblk":
 		// The demo device is a file, so no block device enumeration applies.
 		return external.Result{Stdout: `{"blockdevices":[]}`}, nil
