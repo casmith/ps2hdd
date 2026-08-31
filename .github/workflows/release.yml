@@ -85,16 +85,22 @@ jobs:
           ## Install
 
           \`\`\`sh
-          curl -LO https://github.com/${{ github.repository }}/releases/download/${version}/ps2hdd-linux-amd64
+          base=https://github.com/${{ github.repository }}/releases/download/${version}
+          curl -fLO --retry 3 \$base/ps2hdd-linux-amd64
+          curl -fLO --retry 3 \$base/SHA256SUMS
+          sha256sum -c --ignore-missing SHA256SUMS
           sudo install -m0755 ps2hdd-linux-amd64 /usr/local/bin/ps2hdd
           \`\`\`
+
+          \`-f\` is not decoration. Without it curl writes the server's error page
+          to the file, and \`install\` will happily mark nine bytes of \`Not Found\`
+          executable; the first thing you see is a shell trying to run it. With
+          \`-f\` a failed download leaves no file and says so.
 
           Use \`ps2hdd-linux-arm64\` on aarch64. \`/usr/local/bin\` matters: sudo's
           \`secure_path\` does not include \`~/.local/bin\` or Homebrew, and ps2hdd
           needs raw block device access, so a binary anywhere else is invisible to
           exactly the runs that need it.
-
-          Verify with \`sha256sum -c SHA256SUMS\`.
 
           Reading a PS2 HDD needs no external tools. Installing games needs
           \`hdl_dump\`, and artwork or PS1 support needs \`pfsfuse\`; run
@@ -108,6 +114,11 @@ jobs:
           # normal, so which one happened is decided by looking rather than by
           # assuming, and the install instructions are put in front of whatever
           # notes already exist rather than replacing them.
+          # release-please publishes as a draft, so the release does not exist
+          # for anyone until its binaries are attached below. Without that
+          # there is a window between the release appearing and the build
+          # finishing in which every download is a 404 -- and a 404 saved to
+          # disk is what a broken install looks like.
           if gh release view "$version" >/dev/null 2>&1; then
             echo "release $version exists; attaching binaries"
             gh release upload "$version" \
@@ -118,6 +129,10 @@ jobs:
               *) printf '%s\n\n%s\n' "$install_notes" "$body" |
                    gh release edit "$version" --notes-file - ;;
             esac
+            # Last, and only now: the release becomes visible with everything
+            # it needs already on it. A build that failed leaves a draft, which
+            # is the right outcome -- a release with no binaries is not one.
+            gh release edit "$version" --draft=false --latest
           else
             echo "no release for $version; creating one"
             gh release create "$version" \
