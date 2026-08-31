@@ -144,19 +144,47 @@ func (s *Services) PlanInstallAll(ctx context.Context, opts PlanOptions) (Instal
 		}
 	}
 
+	sel := append(ps2, ps1Games...)
+	planned, err := s.PlanInstall(ctx, sel, opts)
+	if err != nil {
+		return plan, warnings, err
+	}
+	planned.Skipped = plan.Skipped
+	return planned, warnings, nil
+}
+
+// PlanInstall works out what installing a given set of titles would cost.
+//
+// The set is whatever the caller has already chosen -- everything available,
+// or the lines of a list file -- and the accounting is the same either way:
+// each title is placed on a drive the ones before it have filled.
+func (s *Services) PlanInstall(ctx context.Context, games []model.Game, opts PlanOptions) (InstallPlan, error) {
+	var plan InstallPlan
+	var ps2, ps1Games []model.Game
+	for _, g := range games {
+		if !opts.wants(g.Platform) {
+			continue
+		}
+		if g.Platform == model.PlatformPS2 {
+			ps2 = append(ps2, g)
+		} else {
+			ps1Games = append(ps1Games, g)
+		}
+	}
+	var err error
 	if opts.wants(model.PlatformPS2) {
 		plan.PS2, err = s.planPS2(ctx, ps2)
 		if err != nil {
-			return plan, warnings, err
+			return plan, err
 		}
 	}
 	if opts.wants(model.PlatformPS1) {
 		plan.PS1, err = s.planPS1(ctx, ps1Games)
 		if err != nil {
-			return plan, warnings, err
+			return plan, err
 		}
 	}
-	return plan, warnings, nil
+	return plan, nil
 }
 
 // planPS2 places each image against a working copy of the APA chunk map.

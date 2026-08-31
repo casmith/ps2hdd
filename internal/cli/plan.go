@@ -3,8 +3,11 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/casmith/ps2hdd/internal/app"
+	"github.com/casmith/ps2hdd/internal/catalog"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
@@ -14,6 +17,106 @@ func planAll(env *Env, ctx context.Context, opts app.PlanOptions) error {
 	if err != nil {
 		return err
 	}
+	return renderPlan(env, plan, warnings)
+}
+
+// planList renders what installing the titles named in a file would cost.
+//
+// Every line must resolve. A list is usually generated or hand-edited, and a
+// typo that quietly dropped one game out of two hundred would be found months
+// later by its absence -- so an unresolved line stops the plan and is reported
+// by line number, with the whole set of failures at once rather than the first.
+func planList(env *Env, ctx context.Context, path string, opts app.PlanOptions) error {
+	lines, err := readGameList(path)
+	if err != nil {
+		return err
+	}
+	c, warnings, err := env.Svc.Catalog(ctx)
+	if err != nil {
+		return err
+	}
+
+	var games []model.Game
+	var unresolved []string
+	seen := map[string]bool{}
+	skipped := 0
+	for _, e := range lines {
+		g, installed, err := resolveListEntry(env, ctx, c, e.Query)
+		if err != nil {
+			unresolved = append(unresolved, fmt.Sprintf("line %d: %s", e.Line, err))
+			continue
+		}
+		// A list that names the same game twice would otherwise have it
+		// counted twice against the free space.
+		key := model.NormalizeGameID(g.GameID) + "|" + g.Title
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if installed {
+			skipped++
+			continue
+		}
+		games = append(games, g)
+	}
+	if len(unresolved) > 0 {
+		return fmt.Errorf("%d entr(ies) in %s could not be resolved:\n  %s",
+			len(unresolved), path, strings.Join(unresolved, "\n  "))
+	}
+
+	plan, err := env.Svc.PlanInstall(ctx, games, opts)
+	if err != nil {
+		return err
+	}
+	plan.Skipped = skipped
+	return renderPlan(env, plan, warnings)
+}
+
+// resolveListEntry turns one line into a title: a path if it names a file that
+// exists, and a catalog lookup otherwise. Both shapes are useful in one list --
+// a library title by name, a one-off image by path.
+//
+// installed is read from the catalog row rather than from the game, because a
+// title that is both on the drive and in a source directory resolves to its
+// source-side view, whose Installed is false by construction. Counting one of
+// those against the free space would make a plan for a mostly-installed
+// library ask for room it does not need.
+func resolveListEntry(env *Env, ctx context.Context, c catalog.Catalog, query string) (model.Game, bool, error) {
+	if looksLikePath(query) {
+		if _, err := os.Stat(query); err == nil {
+			g, err := env.Svc.InspectSource(ctx, query)
+			if err != nil {
+				return model.Game{}, false, err
+			}
+			return g, installedInCatalog(c, g.GameID), nil
+		}
+	}
+	e, err := resolveSourceEntry(c, query)
+	if err != nil {
+		return model.Game{}, false, err
+	}
+	g := e.Game
+	if e.SourceGame != nil {
+		g = *e.SourceGame
+	}
+	return g, e.Installed, nil
+}
+
+// installedInCatalog reports whether a serial is already on the drive.
+func installedInCatalog(c catalog.Catalog, gameID string) bool {
+	want := model.NormalizeGameID(gameID)
+	if want == "" {
+		return false
+	}
+	for _, e := range c.Entries {
+		if e.Installed && model.NormalizeGameID(e.GameID) == want {
+			return true
+		}
+	}
+	return false
+}
+
+func renderPlan(env *Env, plan app.InstallPlan, warnings []error) error {
 	if env.JSON {
 		return env.emitJSON(plan)
 	}
@@ -23,7 +126,7 @@ func planAll(env *Env, ctx context.Context, opts app.PlanOptions) error {
 
 	total := plan.PS2.Count() + plan.PS1.Count()
 	if total == 0 {
-		env.printf("%s\n", dim("Nothing to install: every source title is already on the HDD."))
+		env.printf("%s\n", dim("Nothing to install: every title asked for is already on the HDD."))
 		return nil
 	}
 	env.printf("\n%s %d title(s)\n", bold("Would install"), total)
