@@ -230,6 +230,11 @@ func (s *Services) Install(ctx context.Context, g model.Game, opts InstallOption
 	if opts.Title != "" {
 		g.Title = opts.Title
 	}
+	// Space abandoned by a run that was killed is reclaimed here, at the point
+	// it is about to be needed, rather than on a timer.
+	if !s.DryRun {
+		s.ReapStaleScratch(ctx)
+	}
 	switch g.Platform {
 	case model.PlatformPS2:
 		return s.installPS2(ctx, g, opts)
@@ -567,7 +572,11 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 		g.Discs = discs
 	}
 
-	staging, err := os.MkdirTemp("", "ps2hdd-vcd-")
+	// Conversion staging goes in the scratch directory, not the system
+	// temporary one. /tmp is tmpfs on most distributions, and a VCD is the
+	// whole disc: converting a full CD there puts 740 MB in RAM, which is
+	// precisely what install.scratch_dir exists to let a user avoid.
+	staging, err := s.vcdStaging(g)
 	if err != nil {
 		return rep, err
 	}
@@ -800,6 +809,34 @@ func firstLine(s string) string {
 		return s[:i]
 	}
 	return s
+}
+
+// vcdStaging makes a directory to convert into, in the scratch space, with
+// room for the largest disc of the title checked before the work starts.
+func (s *Services) vcdStaging(g model.Game) (string, error) {
+	root, err := s.ScratchRoot()
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		return "", fmt.Errorf("create the scratch directory %s: %w", root, err)
+	}
+	// Discs are converted and copied one at a time, so the peak is the largest
+	// of them rather than their total.
+	var largest int64
+	for _, d := range g.Discs {
+		if n := ps1.VCDSize(d.SizeBytes, 0); n > largest {
+			largest = n
+		}
+	}
+	need := largest + scratchHeadroom
+	if free, err := freeSpace(root); err == nil && free < need {
+		return "", fmt.Errorf(
+			"%s needs %s of scratch space to convert into %s, which has %s free.\n"+
+				"Set install.scratch_dir to a directory with more room",
+			g.Title, model.HumanSize(need), root, model.HumanSize(free))
+	}
+	return os.MkdirTemp(root, "vcd-")
 }
 
 // discFraction maps a per-disc fraction onto the whole title's progress.
