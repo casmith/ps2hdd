@@ -104,12 +104,19 @@ BIN/CUE to VCD conversion is built in; no `cue2pops` needed.
 A static binary, no runtime dependencies:
 
 ```sh
-curl -LO https://github.com/casmith/ps2hdd/releases/latest/download/ps2hdd-linux-amd64
+base=https://github.com/casmith/ps2hdd/releases/latest/download
+curl -fLO --retry 3 $base/ps2hdd-linux-amd64
+curl -fLO --retry 3 $base/SHA256SUMS
+sha256sum -c --ignore-missing SHA256SUMS
 sudo install -m0755 ps2hdd-linux-amd64 /usr/local/bin/ps2hdd
 ```
 
-Use `ps2hdd-linux-arm64` on aarch64. Each release also carries `SHA256SUMS`;
-`sha256sum -c SHA256SUMS` checks them.
+Use `ps2hdd-linux-arm64` on aarch64.
+
+`-f` is not decoration. Without it curl writes the server's error page into the
+file, and `install` will happily mark nine bytes of `Not Found` executable; the
+first sign of trouble is a shell trying to run it. With `-f` a failed download
+leaves no file behind and says so.
 
 `/usr/local/bin` is not incidental. ps2hdd needs raw block device access, so it
 is normally run under `sudo`, and sudo's `secure_path` includes neither
