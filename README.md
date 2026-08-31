@@ -436,24 +436,32 @@ go build ./cmd/ps2hdd
 
 ### Cutting a release
 
-```sh
-git tag v0.1.0
-git push origin v0.1.0
-```
+Releases are proposed by [release-please](https://github.com/googleapis/release-please)
+and cut by merging its pull request. Nothing is tagged by hand.
 
-The tag is the trigger. `.github/workflows/release.yml` re-runs gofmt, vet and
-the race suite on that commit, cross-compiles amd64 and arm64, checks that the
-binary actually reports the tag it was built from, writes `SHA256SUMS`, and
-publishes a GitHub Release with generated notes.
+Every push to `main` is read as conventional commits. `feat:` bumps the minor
+version, `fix:` the patch; anything marked `BREAKING CHANGE:` bumps the minor
+too while the project is below 1.0, because a major bump before there is a
+stable interface says nothing. release-please keeps one PR open showing the
+version it would publish and the changelog it would write, and rewrites it as
+more commits land. Merging it tags, creates the release, and updates
+`CHANGELOG.md`.
+
+`.github/workflows/release.yml` then re-runs gofmt, vet and the race suite on
+that commit, cross-compiles amd64 and arm64, checks that the binary reports the
+tag it was built from, writes `SHA256SUMS` and attaches everything.
+
+It is called directly rather than waiting on the tag, because **a tag pushed
+with `GITHUB_TOKEN` does not trigger workflows** — that is what stops a workflow
+setting itself off forever. A hand-pushed `v*` tag still works and takes the
+same path, creating the release itself, which is what keeps an out-of-band
+release possible.
 
 The version reaches the binary through `-X main.version`, so it is only ever as
 good as `git describe` — with no tags at all it degrades to a bare commit hash,
 silently. The workflow asserts `--version` contains the tag rather than trusting
 that, because a rename of `main.version` would otherwise leave every release
 reporting `dev` with nothing failing.
-
-Choosing the number stays manual. It is a claim about compatibility, and no
-commit-message convention can make that claim on your behalf.
 
 The suite runs against synthetic APA images (`internal/apa/apasynth`),
 synthetic ISO 9660 and MODE2/2352 discs (`internal/iso9660/isosynth`),
