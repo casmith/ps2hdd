@@ -330,8 +330,37 @@ Run it before you size `__.POPS`, since growing that partition afterwards needs
 a PS2-side tool. With no drive attached the sizes are still worth having; the
 verdict then reads `not measured` rather than inventing one.
 
-`--all` is planning only for now. Running a several-hundred-title write has
-questions about ordering, resuming and partial failure that are not settled.
+### Choosing a subset
+
+`--from-list` plans the titles named in a file instead of everything:
+
+```sh
+ps2hdd install --from-list wanted.txt --dry-run
+```
+
+```
+# what I actually want
+Gran Turismo 4
+SCUS_974.72          # by serial, with a note
+/mnt/roms/Ico (USA).7z
+```
+
+One title, serial or image path per line; blank lines are skipped and `#`
+starts a comment, so the list can carry notes and live in version control.
+**Every line must resolve** — a typo that quietly dropped one game out of two
+hundred would be noticed months later by its absence — and unresolved lines are
+reported together, by line number, rather than one run at a time. A title
+already on the drive is skipped rather than counted against the free space.
+
+A title containing a `#` is cut short by the comment rule; name that one by its
+serial.
+
+**A directory of symbolic links is not an alternative.** The source scanner
+reads regular files only, so links are skipped without comment.
+
+`--all` and `--from-list` are planning only for now. Running a several-hundred-
+title write has questions about ordering, resuming and partial failure that are
+not settled.
 
 ### Compressed sources
 
