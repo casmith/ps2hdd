@@ -217,7 +217,18 @@ func (c Catalog) Find(query string) (matches []CatalogEntry) {
 
 // Counts summarises a catalog for the status line.
 func (c Catalog) Counts() (installed, available, missingAssets int) {
-	for _, e := range c.Entries {
+	return Count(c.Entries)
+}
+
+// Count totals a set of entries.
+//
+// It takes the entries rather than reading them off the catalog because a
+// summary printed under a filtered listing has to describe what was shown. A
+// count of the whole catalog under `list --installed` reports the hundreds of
+// titles the filter just excluded, which reads as the filter having done
+// nothing at all.
+func Count(entries []CatalogEntry) (installed, available, missingAssets int) {
+	for _, e := range entries {
 		if e.Installed {
 			installed++
 		} else {

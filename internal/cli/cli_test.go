@@ -253,3 +253,48 @@ func TestInfoOnAPath(t *testing.T) {
 		t.Errorf("info did not identify the image:\n%s", out)
 	}
 }
+
+// The summary under a filtered listing has to describe what was shown. It used
+// to count the whole catalog, so `list --installed` on a large library ended
+// with "34 shown; 34 installed, 1926 available" -- naming the hundreds of
+// titles the filter had just excluded, which reads as the filter doing nothing.
+func TestListSummaryCountsOnlyWhatIsShown(t *testing.T) {
+	all, _, err := run(t, "--demo", "list", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(all, "installed") || !strings.Contains(all, "available") {
+		t.Fatalf("unfiltered summary should mention both:\n%s", all)
+	}
+
+	onlyInstalled, _, err := run(t, "--demo", "list", "--installed", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := summaryLine(t, onlyInstalled)
+	if strings.Contains(summary, "available") {
+		t.Errorf("`list --installed` counts titles it excluded: %q", summary)
+	}
+	if !strings.Contains(summary, "installed") {
+		t.Errorf("summary = %q, want an installed count", summary)
+	}
+
+	onlyAvailable, _, err := run(t, "--demo", "list", "--available", "--no-artwork")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := summaryLine(t, onlyAvailable); strings.Contains(s, "installed") {
+		t.Errorf("`list --available` counts installed titles: %q", s)
+	}
+}
+
+func summaryLine(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "shown") {
+			return strings.TrimSpace(line)
+		}
+	}
+	t.Fatalf("no summary line in:\n%s", out)
+	return ""
+}
