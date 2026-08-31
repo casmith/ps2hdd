@@ -100,8 +100,81 @@ func (s *Services) extractSource(ctx context.Context, g model.Game, opts Install
 			filepath.Base(path), filepath.Base(g.SourcePath))
 	}
 	log.Info("extracted archived source", "path", path, "bytes", fi.Size())
+	source := HDLSourcePath(path)
+	if err := ensureCuesheet(source); err != nil {
+		cleanup()
+		return "", nil, err
+	}
 	return HDLSourcePath(path), cleanup, nil
 }
+
+// ensureCuesheet writes a cuesheet beside a raw CD rip that has none.
+//
+// hdl_dump identifies its input by probing, and a bare 2352-byte-per-sector
+// .bin matches nothing it knows. Its ISO probe looks for "\001CD001" at
+// 0x8000, which is sector 16 counted in 2048-byte sectors; in a MODE2/2352 rip
+// that descriptor is at 0x9318 instead, twenty-four bytes into a wider sector.
+// Its only other reader for this shape is the CDRWIN one, which needs a
+// cuesheet. So the file is refused with "Input or output is unsupported" --
+// exit 114 -- and a perfectly good rip cannot be installed.
+//
+// Plenty of archives hold exactly this: one .bin, no .cue. The cuesheet those
+// rips are missing has no information in it that the file does not already
+// carry, so it is written rather than demanded. hdl_dump accepts
+// "TRACK 01 MODE2/2352" and reads the image correctly from there.
+//
+// Nothing is guessed. A size that is not a whole number of 2352-byte sectors
+// is not this shape, and the descriptor is checked where a raw rip would keep
+// it before anything is written.
+func ensureCuesheet(source string) error {
+	if !strings.EqualFold(filepath.Ext(source), ".bin") {
+		return nil // already a cuesheet, or an ISO hdl_dump can read
+	}
+	raw, err := isRawMode2(source)
+	if err != nil || !raw {
+		// Not a raw rip, or unreadable: leave it alone and let hdl_dump say so
+		// in its own words rather than inventing a cuesheet for it.
+		return nil
+	}
+	cue := strings.TrimSuffix(source, filepath.Ext(source)) + ".cue"
+	body := fmt.Sprintf("FILE %q BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n",
+		filepath.Base(source))
+	if err := os.WriteFile(cue, []byte(body), 0o600); err != nil {
+		return fmt.Errorf("write a cuesheet for %s: %w", filepath.Base(source), err)
+	}
+	return nil
+}
+
+// isRawMode2 reports whether a file is a MODE2/2352 CD image: a whole number
+// of 2352-byte sectors, with the ISO 9660 primary volume descriptor where such
+// an image keeps it.
+func isRawMode2(path string) (bool, error) {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return false, err
+	}
+	if fi.Size()%rawSectorSize != 0 {
+		return false, nil
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return false, err
+	}
+	defer f.Close()
+	// Sector 16, past the 24 bytes of sync, header and subheader.
+	buf := make([]byte, 6)
+	if _, err := f.ReadAt(buf, 16*rawSectorSize+rawSectorHeader); err != nil {
+		return false, nil
+	}
+	return string(buf) == "\x01CD001", nil
+}
+
+const (
+	// rawSectorSize is a CD sector as ripped, sync bytes and all.
+	rawSectorSize = 2352
+	// rawSectorHeader is the sync, header and subheader before the user data.
+	rawSectorHeader = 24
+)
 
 // cueMemberFor finds the cuesheet inside an archive that describes a member.
 //
