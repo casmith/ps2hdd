@@ -375,6 +375,18 @@ grep -q "Frees" "$WORK/rm-plan.txt" || fail "the plan does not say what it frees
 ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
   || fail "a dry run removed a title"
 
+# A list is very often built by pasting rows out of `ps2hdd list`, which match
+# no title and no filename taken whole -- but carry a serial, and a serial names
+# exactly one game.
+ps2hdd list --ps2 --installed --no-artwork | grep '^PS2' > "$WORK/pasted.txt"
+test -s "$WORK/pasted.txt" || fail "no installed PS2 rows to paste"
+# Captured with || true: an unresolved line exits non-zero, and set -e would
+# end the run before the assertion below could say what went wrong.
+ps2hdd remove --from-list "$WORK/pasted.txt" --dry-run > "$WORK/rm-pasted.txt" 2>&1 || true
+grep -q "could not be resolved" "$WORK/rm-pasted.txt" \
+  && fail "rows pasted from the listing did not resolve: $(cat "$WORK/rm-pasted.txt")" || true
+grep -q "Would remove" "$WORK/rm-pasted.txt" || fail "the pasted-row plan covered nothing"
+
 # A title named but not on the drive is a no-op, counted rather than attempted:
 # deleting what is already gone changes nothing, and reporting it as a failure
 # would bury the ones that really did fail.

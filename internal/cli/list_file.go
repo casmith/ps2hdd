@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/casmith/ps2hdd/internal/model"
 )
 
 // ListEntry is one line of a game list, with where it came from so a line that
@@ -12,6 +14,33 @@ import (
 type ListEntry struct {
 	Line  int
 	Query string
+}
+
+// serialIn pulls the game id out of a line that carries one among other text.
+//
+// A list is very often assembled by pasting rows straight out of `ps2hdd list`,
+// which is a reasonable way to build one and produces lines like
+//
+//	PS2  Arc the Lad - End of Darkness  SLUS_211.65  3.0 GiB  Installed + source
+//
+// Taken whole that matches no title, no filename and no serial -- but the
+// serial is right there in it, and a serial names exactly one game.
+//
+// It is the last thing tried, never the first. An exact title or filename is a
+// better answer than a token found by scanning, so only a line that nothing
+// else could place is searched this way.
+func serialIn(query string) string {
+	id := model.FindGameID(query)
+	if id == "" {
+		return ""
+	}
+	// A line that is nothing but the serial already resolves directly, and the
+	// comparison has to be between like and like: SLUS-21165 and SLUS_211.65
+	// are the same serial written two ways, and only normalising both says so.
+	if model.NormalizeGameID(id) == model.NormalizeGameID(query) {
+		return ""
+	}
+	return id
 }
 
 // readGameList parses a list of titles to install.

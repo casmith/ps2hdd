@@ -150,11 +150,20 @@ func resolveInstalledEntry(env *Env, ctx context.Context, c catalog.Catalog, que
 	} else if len(m) > 1 {
 		return model.Game{}, false, ambiguous(query, m)
 	}
-	e, err := resolveSourceEntry(c, query)
-	if err != nil {
-		return model.Game{}, false, fmt.Errorf("nothing installed or known matches %q", query)
+	if e, err := resolveSourceEntry(c, query); err == nil {
+		return e.Game, e.Installed, nil
 	}
-	return e.Game, e.Installed, nil
+	// Last: the serial carried inside a line that is not a bare name, which is
+	// what a row pasted out of `ps2hdd list` is.
+	if id := serialIn(query); id != "" {
+		if g, err := env.Svc.FindInstalled(ctx, id); err == nil {
+			return g, true, nil
+		}
+		if e, err := resolveSourceEntry(c, id); err == nil {
+			return e.Game, e.Installed, nil
+		}
+	}
+	return model.Game{}, false, fmt.Errorf("nothing installed or known matches %q", query)
 }
 
 func isAmbiguous(err error) bool {
