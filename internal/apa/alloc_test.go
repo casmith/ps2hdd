@@ -261,3 +261,71 @@ func TestAllocatorKeepsChargingOverhead(t *testing.T) {
 		}
 	}
 }
+
+// APA does not unlink a removed partition. apaRemovePartition rewrites its
+// header in place as "__empty", so the entry stays in the chain with the same
+// extent and means "this space is free" -- which is why hdl_dump drops those
+// entries and returns their chunks to the free map as it reads a slice.
+//
+// Counting them as occupied is a drive that never gets emptier: remove
+// thirty-five games and the free space does not move.
+func TestEmptyPartitionsAreFreeSpace(t *testing.T) {
+	full := freeSlice(64, 0, 1, 2, 3)
+	full.Partitions = []Header{
+		{ID: "__mbr", Start: 0, Length: chunkSectors},
+		{ID: "PP.SLUS_210.50.Burnout 3", Start: chunkSectors, Length: chunkSectors},
+		// Two chunks that were a game until it was removed.
+		{ID: EmptyPartitionID, Start: 2 * chunkSectors, Length: 2 * chunkSectors},
+	}
+	full.SizeMB = 64 * ChunkMB
+	setupStatistics(&full)
+
+	// Four chunks are described, but only two of them are in use.
+	if full.UsedChunks != 2 {
+		t.Errorf("used = %d, want 2: the __empty entry is free space", full.UsedChunks)
+	}
+	if want := full.TotalChunks - 2; full.FreeChunks != want {
+		t.Errorf("free = %d, want %d", full.FreeChunks, want)
+	}
+	// And the allocator can place a title in the space that was given back.
+	for i, used := range full.ChunkMap {
+		if i >= 2 && i < 4 && used {
+			t.Errorf("chunk %d is still marked used after the partition was removed", i)
+		}
+	}
+}
+
+// An emptied partition is not a partition: it must not be listed as one, and
+// must not answer to the name of the game that used to be there.
+func TestEmptyPartitionsAreNotListed(t *testing.T) {
+	s := freeSlice(8)
+	s.SizeMB = 8 * ChunkMB
+	s.Partitions = []Header{
+		{ID: "__mbr", Start: 0, Length: chunkSectors},
+		{ID: EmptyPartitionID, Start: chunkSectors, Length: chunkSectors},
+	}
+	toc := &TOC{Slices: []Slice{s}}
+	for _, p := range toc.Partitions() {
+		if p.IsEmpty() {
+			t.Errorf("%q was listed as a partition", p.ID)
+		}
+	}
+	if _, _, ok := toc.Find(EmptyPartitionID); ok {
+		t.Error("an emptied partition answered to its name")
+	}
+}
+
+// The name is how both the driver and hdl_dump identify these, so the check is
+// on the name and is not case sensitive.
+func TestIsEmpty(t *testing.T) {
+	for _, id := range []string{"__empty", "__EMPTY", "__Empty"} {
+		if !(Header{ID: id}).IsEmpty() {
+			t.Errorf("%q was not recognised as empty", id)
+		}
+	}
+	for _, id := range []string{"__mbr", "+OPL", "__.POPS", "PP.SLUS_210.50.Burnout 3", ""} {
+		if (Header{ID: id}).IsEmpty() {
+			t.Errorf("%q was treated as empty", id)
+		}
+	}
+}

@@ -48,6 +48,25 @@ const (
 	TypeHDL   uint16 = 0x1337 // HDLoader game image
 )
 
+// EmptyPartitionID is the name APA gives a partition that has been removed.
+//
+// Removal does not unlink anything. apaRemovePartition rewrites the header in
+// place -- memset to zero, then magic, start, next, prev, length and the id
+// "__empty" (ps2sdk, iop/hdd/libapa/src/apa.c) -- so the entry stays in the
+// chain, keeps its extent, and means "this space is free".
+//
+// Anything that walks the chain and counts every entry as occupied therefore
+// reports a drive that never gets emptier, however much is removed from it.
+// hdl_dump drops these entries as it reads a slice and returns their chunks to
+// the free map (apa.c, AUTO_DELETE_EMPTY); this package does the same.
+const EmptyPartitionID = "__empty"
+
+// IsEmpty reports whether this header describes freed space rather than a
+// partition.
+func (h Header) IsEmpty() bool {
+	return strings.EqualFold(h.ID, EmptyPartitionID)
+}
+
 // flagSub marks a header as belonging to a sub-partition.
 const flagSub uint16 = 0x0001
 
@@ -136,7 +155,7 @@ func (t *TOC) Partitions() []Header {
 	var out []Header
 	for _, s := range t.Slices {
 		for _, p := range s.Partitions {
-			if p.IsMain() {
+			if p.IsMain() && !p.IsEmpty() {
 				out = append(out, p)
 			}
 		}
@@ -149,7 +168,7 @@ func (t *TOC) Partitions() []Header {
 func (t *TOC) Find(id string) (Header, int, bool) {
 	for _, s := range t.Slices {
 		for _, p := range s.Partitions {
-			if p.IsMain() && strings.EqualFold(p.ID, id) {
+			if p.IsMain() && !p.IsEmpty() && strings.EqualFold(p.ID, id) {
 				return p, s.Index, true
 			}
 		}
@@ -382,6 +401,12 @@ func setupStatistics(s *Slice) {
 		}
 	}
 	for _, p := range s.Partitions {
+		// A removed partition is still in the chain, named __empty, and its
+		// chunks are free. Counting them is what makes a removal look like it
+		// reclaimed nothing.
+		if p.IsEmpty() {
+			continue
+		}
 		mark(p.Start, p.Length)
 	}
 	s.ChunkMap = occupied
