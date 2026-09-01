@@ -7,12 +7,19 @@ name: Release
 # and creates the release itself, which is what makes an out-of-band release
 # possible without waiting on a bot.
 #
-# The version and the thing to check out are separate inputs, and have to be.
-# release-please publishes as a draft so that no release is visible without its
-# binaries -- and a draft release has no git tag, because GitHub creates the tag
-# only when the release is published. Checking out the version string therefore
-# finds nothing. What does exist is the commit the release points at, so that is
-# what gets built.
+# The version and the thing to check out are separate inputs. The tag is created
+# with the release, so it would usually resolve -- but a tag is a ref that has to
+# propagate, and the commit release-please reports is exact and available the
+# moment the release exists. There is nothing to gain by depending on the slower
+# of the two.
+#
+# There is a window between the release appearing and the binaries being on it,
+# during which its asset URLs are 404s. That is why the install instructions use
+# `curl -fLO`, which writes no file when the server says no. Closing the window
+# by publishing as a draft was tried and reverted: a draft release has no tag,
+# release-please identifies its own last release by tag, and without one it
+# reconsidered the entire history and proposed a minor bump containing every
+# commit ever made.
 on:
   push:
     tags: ['v*']
@@ -23,11 +30,11 @@ on:
         required: true
         type: string
       ref:
-        description: 'Commit to build from. Needed while the release is a draft, since its tag does not exist yet.'
+        description: 'Commit to build from. Defaults to the tag.'
         required: false
         type: string
-  # Called by release-please, which has created the release -- as a draft, so
-  # its tag does not exist -- and needs the binaries attached to it.
+  # Called by release-please, which has created the release and needs the
+  # binaries attached to it.
   workflow_call:
     inputs:
       tag:
@@ -47,8 +54,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          # The commit when there is one, because a draft release's tag does
-          # not exist yet; the tag otherwise, for a hand-pushed one.
+          # The commit when the caller knows it, the tag otherwise.
           ref: ${{ inputs.ref || inputs.tag || github.ref }}
           # Full history: nothing needs it today, but a shallow checkout is a
           # trap for anything that later reaches for git describe.
@@ -129,11 +135,6 @@ jobs:
           # normal, so which one happened is decided by looking rather than by
           # assuming, and the install instructions are put in front of whatever
           # notes already exist rather than replacing them.
-          # release-please publishes as a draft, so the release does not exist
-          # for anyone until its binaries are attached below. Without that
-          # there is a window between the release appearing and the build
-          # finishing in which every download is a 404 -- and a 404 saved to
-          # disk is what a broken install looks like.
           if gh release view "$version" >/dev/null 2>&1; then
             echo "release $version exists; attaching binaries"
             gh release upload "$version" \
@@ -144,9 +145,9 @@ jobs:
               *) printf '%s\n\n%s\n' "$install_notes" "$body" |
                    gh release edit "$version" --notes-file - ;;
             esac
-            # Last, and only now: the release becomes visible with everything
-            # it needs already on it. A build that failed leaves a draft, which
-            # is the right outcome -- a release with no binaries is not one.
+            # A no-op on a release that is already published, and the recovery
+            # path for one left as a draft by the version of this that made
+            # them that way.
             gh release edit "$version" --draft=false --latest
           else
             echo "no release for $version; creating one"

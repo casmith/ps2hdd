@@ -40,6 +40,6 @@ jobs:
     uses: ./.github/workflows/release.yml
     with:
       tag: ${{ needs.release-please.outputs.tag }}
-      # The release is a draft, so its tag does not exist yet. The commit it
-      # was tagged at does.
+      # The commit the release was tagged at, which is exact and needs no ref
+      # to have propagated.
       ref: ${{ needs.release-please.outputs.sha }}
