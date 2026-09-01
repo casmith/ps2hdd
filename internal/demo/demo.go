@@ -21,6 +21,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/casmith/ps2hdd/internal/apa"
 	"github.com/casmith/ps2hdd/internal/apa/apasynth"
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/external"
@@ -523,7 +524,13 @@ func splitPFSLine(line string) []string {
 	return out
 }
 
-// removePartition takes a game or a PFS partition out of the synthetic table.
+// removePartition empties a game or a PFS partition in the synthetic table.
+//
+// It leaves an "__empty" partition of the same size behind, because that is
+// what APA does: apaRemovePartition rewrites the header in place rather than
+// unlinking it, and the entry stays in the chain meaning "this space is free".
+// Deleting the entry outright -- which this used to do -- models a disk that
+// no real removal produces, and hides whether the space is ever given back.
 func (e *Env) removePartition(name string) bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -532,6 +539,9 @@ func (e *Env) removePartition(name string) bool {
 	for _, g := range e.disk.Games {
 		if apasynth.SanitizePartitionName(g.Startup, g.Name) == name {
 			found = true
+			e.disk.Parts = append(e.disk.Parts, apasynth.PFSPart{
+				ID: apa.EmptyPartitionID, SizeMB: g.SizeMB,
+			})
 			continue
 		}
 		games = append(games, g)
@@ -540,16 +550,13 @@ func (e *Env) removePartition(name string) bool {
 	if found {
 		return true
 	}
-	parts := e.disk.Parts[:0]
-	for _, p := range e.disk.Parts {
+	for i, p := range e.disk.Parts {
 		if strings.EqualFold(p.ID, name) {
-			found = true
-			continue
+			e.disk.Parts[i].ID = apa.EmptyPartitionID
+			return true
 		}
-		parts = append(parts, p)
 	}
-	e.disk.Parts = append([]apasynth.PFSPart(nil), parts...)
-	return found
+	return false
 }
 
 // addPartition creates a PFS partition, for `mkpart`. The size is pfsshell's

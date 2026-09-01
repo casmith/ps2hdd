@@ -443,6 +443,20 @@ step "unmount refuses a path it did not create"
 grep -q "refusing to unmount" "$WORK/badunmount.txt" \
   || fail "unmount did not refuse a path outside its own runtime directory"
 
+step "removing a game gives its space back"
+# APA does not unlink a removed partition: it rewrites the header in place as
+# "__empty", which stays in the chain and means "this space is free". Counting
+# those as occupied is a drive that never gets emptier however much is removed,
+# so the figure is checked rather than the command's exit status.
+ps2hdd install --from-source "Ridge Racer V"
+free_before=$(ps2hdd status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["apa_free_bytes"])')
+ps2hdd remove "Ridge Racer V"
+free_after=$(ps2hdd status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["apa_free_bytes"])')
+[ "$free_after" -gt "$free_before" ] \
+  || fail "free space did not increase after a removal: $free_before -> $free_after"
+# And an emptied partition is not listed as one.
+ps2hdd status | grep -qi "__empty" && fail "an emptied partition was listed as a partition" || true
+
 step "a pfsshell that exits 0 having done nothing is caught"
 # Removing a game goes through pfsshell's rmpart, and pfsshell is a shell: it
 # exits 0 whether or not the command inside it worked. The only trustworthy
