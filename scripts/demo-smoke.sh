@@ -33,6 +33,11 @@ ps2hdd() { "$BIN" --demo --no-color --yes "$@"; }
 fail() { echo "FAIL: $*" >&2; exit 1; }
 step() { printf '\n=== %s\n' "$*"; }
 
+step "the install script is syntactically sound"
+# It is the first thing a new user runs, and nothing else here would notice it
+# breaking.
+bash -n "$(dirname "$0")/install.sh" || fail "scripts/install.sh does not parse"
+
 step "status"
 ps2hdd status | tee "$WORK/status.txt"
 grep -q "APA *detected" "$WORK/status.txt" || fail "APA not detected"

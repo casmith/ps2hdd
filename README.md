@@ -104,6 +104,18 @@ BIN/CUE to VCD conversion is built in; no `cue2pops` needed.
 A static binary, no runtime dependencies:
 
 ```sh
+curl -fsSLO https://raw.githubusercontent.com/casmith/ps2hdd/main/scripts/install.sh
+less install.sh          # it is 120 lines; read it before running it
+bash install.sh          # or: bash install.sh v0.7.3
+```
+
+It picks the right architecture, verifies the checksum **before** installing,
+retries a download that is not there yet, and uses `sudo` only if the
+destination actually needs it. `PREFIX` chooses where it goes.
+
+Or by hand, which is the same four steps:
+
+```sh
 base=https://github.com/casmith/ps2hdd/releases/latest/download
 curl -fLO --retry 3 $base/ps2hdd-linux-amd64
 curl -fLO --retry 3 $base/SHA256SUMS
