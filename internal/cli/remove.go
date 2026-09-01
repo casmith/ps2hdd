@@ -7,14 +7,16 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/casmith/ps2hdd/internal/app"
+	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
 func newRemoveCommand(env *Env) *cobra.Command {
 	var purgeAssets bool
+	var fromList string
 
 	cmd := &cobra.Command{
-		Use:     "remove <game-id|title>",
+		Use:     "remove [game-id|title...]",
 		Aliases: []string{"rm", "uninstall"},
 		Short:   "Remove an installed game from the HDD",
 		Long: `Remove an installed PS1 or PS2 title.
@@ -26,10 +28,34 @@ A name that matches more than one title is refused rather than guessed at.
 Artwork is kept unless --purge-assets is given: it is small, often
 hand-curated, and exactly what you want back if you reinstall.
 
-Removing a multi-disc PS1 title removes every disc.`,
-		Args: cobra.MinimumNArgs(1),
+Removing a multi-disc PS1 title removes every disc.
+
+--from-list removes everything named in a file, resolved the same way an
+install list is: a title, a serial, a partition name, or the filename of the
+archive it came from. The same list that put a set of games on the drive takes
+them off again.
+
+  ps2hdd remove --from-list gone.txt --dry-run
+  ps2hdd remove --from-list gone.txt
+
+Every line must resolve to something known, and nothing is removed if any line
+does not -- on a delete list a typo costs more than on an install list. A line
+naming a title that is simply not installed is counted and skipped, because
+deleting what is already gone is a no-op. Confirmation is once for the run.`,
+		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			ctx := cmd.Context()
+
+			if fromList != "" {
+				if len(args) > 0 {
+					return fmt.Errorf("--from-list chooses what to remove; do not name titles as well")
+				}
+				return removeList(env, ctx, config.ExpandPath(fromList),
+					app.RemoveOptions{PurgeAssets: purgeAssets})
+			}
+			if len(args) == 0 {
+				return fmt.Errorf("name a title to remove, or use --from-list")
+			}
 			var reports []app.RemoveReport
 
 			for _, query := range args {
@@ -63,6 +89,7 @@ Removing a multi-disc PS1 title removes every disc.`,
 		},
 	}
 	cmd.Flags().BoolVar(&purgeAssets, "purge-assets", false, "also delete the game's artwork and configuration")
+	cmd.Flags().StringVar(&fromList, "from-list", "", "remove the titles named in this file, one per line")
 	return cmd
 }
 

@@ -350,6 +350,47 @@ ps2hdd list --installed --no-artwork > "$WORK/after-ambiguous.txt"
 grep -q "Ridge Racer V" "$WORK/after-ambiguous.txt" || fail "an ambiguous remove deleted a game"
 grep -q "Burnout 3 Takedown" "$WORK/after-ambiguous.txt" || fail "an ambiguous remove deleted a game"
 
+step "--from-list removes in bulk, the same list that installs"
+cat > "$WORK/gone.txt" <<'LIST'
+# take these back off
+Gran Turismo 4
+Ridge Racer V.iso        # by source filename, as an ls would write it
+Nothing Installed Here
+LIST
+# A line naming a title that is not on the drive is a no-op. A line matching
+# nothing at all is a typo, and on a delete list a typo costs more than on an
+# install list -- so nothing is removed until every line resolves.
+ps2hdd remove --from-list "$WORK/gone.txt" > "$WORK/rm-typo.txt" 2>&1 \
+  && fail "a delete list with an unresolvable line ran anyway" || true
+grep -q "line 4" "$WORK/rm-typo.txt" || fail "the failure does not name the line: $(cat "$WORK/rm-typo.txt")"
+ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
+  || fail "titles were removed despite the list being refused"
+
+# With the bad line gone it runs, and resolves both a title and a filename.
+head -3 "$WORK/gone.txt" > "$WORK/gone2.txt"
+ps2hdd remove --from-list "$WORK/gone2.txt" --dry-run > "$WORK/rm-plan.txt" 2>&1
+grep -q "Would remove 2 title" "$WORK/rm-plan.txt" \
+  || fail "the plan did not cover both titles: $(cat "$WORK/rm-plan.txt")"
+grep -q "Frees" "$WORK/rm-plan.txt" || fail "the plan does not say what it frees"
+ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
+  || fail "a dry run removed a title"
+
+# A title named but not on the drive is a no-op, counted rather than attempted:
+# deleting what is already gone changes nothing, and reporting it as a failure
+# would bury the ones that really did fail.
+printf 'Gran Turismo 4\nShadow of the Colossus\n' > "$WORK/gone3.txt"
+ps2hdd remove --from-list "$WORK/gone3.txt" --dry-run > "$WORK/rm-absent.txt" 2>&1
+grep -q "1 named but not on the drive" "$WORK/rm-absent.txt" \
+  || fail "a title that is not installed was not reported as skipped: $(cat "$WORK/rm-absent.txt")"
+grep -q "Would remove 1 title" "$WORK/rm-absent.txt" \
+  || fail "the plan did not narrow to the installed title"
+
+ps2hdd remove --from-list "$WORK/gone2.txt" > "$WORK/rm-done.txt" 2>&1
+grep -q "Removed  2 of 2" "$WORK/rm-done.txt" || fail "the bulk removal did not finish: $(cat "$WORK/rm-done.txt")"
+ps2hdd list --ps2 --installed --no-artwork > "$WORK/after-rm-list.txt"
+grep -q "Gran Turismo 4" "$WORK/after-rm-list.txt" && fail "a listed title survived removal" || true
+grep -q "Ridge Racer V" "$WORK/after-rm-list.txt" && fail "the filename-matched title survived removal" || true
+
 step "a kernel device name is refused"
 "$BIN" --no-color --device /dev/sdb status > "$WORK/refusal.txt" 2>&1 || true
 grep -q "REFUSING OPERATION" "$WORK/refusal.txt" || fail "/dev/sdb was not refused"

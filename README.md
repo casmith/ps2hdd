@@ -397,6 +397,29 @@ time.
 the drive are skipped — the same answer a saved position would have given, and
 one that cannot go stale.
 
+### Removing in bulk
+
+The same list takes them off again:
+
+```sh
+ps2hdd remove --from-list gone.txt --dry-run
+ps2hdd remove --from-list gone.txt
+```
+
+Entries resolve the same way — a title, a serial, a partition name, or the
+filename of the archive the game came from — so a directory listing works in
+both directions. An installed title has no source path of its own, so a
+filename is matched through the catalog, which is what pairs a game on the
+drive with the archive it came from.
+
+The dry run shows what would go and how much it frees. Confirmation is once for
+the run.
+
+**Nothing is removed if any line fails to resolve.** On a delete list a typo
+costs more than on an install list: the wrong match takes a game off the drive.
+A line naming a title that is simply not installed is a different thing — it is
+counted and skipped, because deleting what is already gone is a no-op.
+
 **The next title is unpacked while the current one is written.** The two halves
 of an archived install use different machines — LZMA on one core plus a write
 to scratch, then hdl_dump pushing raw sectors at the drive — and run in
