@@ -9,18 +9,18 @@ import (
 	"github.com/casmith/ps2hdd/internal/model"
 )
 
-// newTestPrefetcher builds one already primed to expect the given titles,
-// which is what StartPrefetch does from its list.
+// newTestPrefetcher builds one already given the titles, by the same route a
+// caller uses -- pre-seeding the fields by hand once left Add treating them as
+// already queued, so the loop had nothing to take and waited forever.
 func newTestPrefetcher(games ...model.Game) *Prefetcher {
 	p := &Prefetcher{
 		expect:  map[string]bool{},
 		ready:   map[string]*PrefetchedSource{},
 		waiters: map[string]chan struct{}{},
 		done:    make(chan struct{}),
+		wake:    make(chan struct{}, 1),
 	}
-	for _, g := range games {
-		p.expect[prefetchKey(g)] = true
-	}
+	p.Add(games...)
 	return p
 }
 
@@ -44,7 +44,7 @@ func TestNilPrefetcherIsInline(t *testing.T) {
 func TestStartPrefetchRefusesUselessDepths(t *testing.T) {
 	s := &Services{}
 	for _, depth := range []int{-1, 0, 1} {
-		if p := s.StartPrefetch(context.Background(), nil, depth, InstallOptions{}); p != nil {
+		if p := s.StartPrefetch(context.Background(), depth, InstallOptions{}); p != nil {
 			t.Errorf("depth %d started a prefetcher", depth)
 			p.Stop()
 		}
@@ -55,7 +55,7 @@ func TestStartPrefetchRefusesUselessDepths(t *testing.T) {
 // to be thrown away.
 func TestStartPrefetchDoesNothingForADryRun(t *testing.T) {
 	s := &Services{DryRun: true}
-	if p := s.StartPrefetch(context.Background(), []model.Game{archived("Ico")}, 2, InstallOptions{}); p != nil {
+	if p := s.StartPrefetch(context.Background(), 2, InstallOptions{}); p != nil {
 		t.Error("a dry run started unpacking")
 		p.Stop()
 	}
@@ -210,7 +210,7 @@ func TestPrefetchOverlapsTheInstall(t *testing.T) {
 		begun <- g.Title
 		return &PrefetchedSource{Release: func() {}}, nil
 	}
-	go p.run(context.Background(), games, make(chan struct{}, slotsFor(2)))
+	go p.run(context.Background(), make(chan struct{}, slotsFor(2)))
 
 	if got := <-begun; got != "A" {
 		t.Fatalf("unpacked %s first, want A", got)

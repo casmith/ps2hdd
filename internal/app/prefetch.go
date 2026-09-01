@@ -66,6 +66,12 @@ type Prefetcher struct {
 	// ahead this runs is a disk budget measured in gigabytes, and testing it
 	// against real archives would mean writing them.
 	unpackFn func(context.Context, model.Game) (*PrefetchedSource, error)
+	// pending is the work not yet started, and wake signals that more has
+	// arrived. The list is fed rather than fixed because the TUI's queue takes
+	// additions while it is running: a prefetcher built from a snapshot would
+	// silently stop pipelining the moment anything was queued behind it.
+	pending []model.Game
+	wake    chan struct{}
 	// hits counts titles the installer took already unpacked. It is the only
 	// evidence the pipeline is doing anything: a run where it is zero spent
 	// the whole time extracting and writing in sequence.
@@ -87,7 +93,7 @@ func (p *Prefetcher) Hits() int {
 //
 // A depth below 2 disables it and returns nil, which every call site treats as
 // "extract inline", so the pipelined and plain paths are the same code.
-func (s *Services) StartPrefetch(ctx context.Context, games []model.Game, depth int, opts InstallOptions) *Prefetcher {
+func (s *Services) StartPrefetch(ctx context.Context, depth int, opts InstallOptions) *Prefetcher {
 	if depth < 2 || s.DryRun {
 		return nil
 	}
@@ -98,19 +104,67 @@ func (s *Services) StartPrefetch(ctx context.Context, games []model.Game, depth 
 		ready:   map[string]*PrefetchedSource{},
 		waiters: map[string]chan struct{}{},
 		done:    make(chan struct{}),
+		wake:    make(chan struct{}, 1),
 	}
 	p.unpackFn = p.unpack
-	for _, g := range games {
-		if g.ArchiveMember != "" {
-			p.expect[prefetchKey(g)] = true
-		}
-	}
 	// The buffer is the whole budget: with depth 2 the goroutine unpacks one
 	// title, hands it over, and blocks until the installer has taken it. That
 	// bounds the scratch directory at two images without counting bytes.
-	slots := make(chan struct{}, slotsFor(depth))
-	go p.run(ctx, games, slots)
+	go p.run(ctx, make(chan struct{}, slotsFor(depth)))
 	return p
+}
+
+// Add queues titles to unpack, in the order given. Anything not in an archive
+// is ignored: there is nothing to unpack and Take says so immediately.
+func (p *Prefetcher) Add(games ...model.Game) {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	if p.stopped {
+		p.mu.Unlock()
+		return
+	}
+	for _, g := range games {
+		if g.ArchiveMember == "" {
+			continue
+		}
+		k := prefetchKey(g)
+		if p.expect[k] {
+			continue // already queued
+		}
+		p.expect[k] = true
+		p.pending = append(p.pending, g)
+	}
+	p.mu.Unlock()
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
+}
+
+// nextPending takes the next title to unpack, waiting for one to arrive.
+// ok is false once the prefetcher is stopped or the context is done.
+func (p *Prefetcher) nextPending(ctx context.Context) (model.Game, bool) {
+	for {
+		p.mu.Lock()
+		if p.stopped {
+			p.mu.Unlock()
+			return model.Game{}, false
+		}
+		if len(p.pending) > 0 {
+			g := p.pending[0]
+			p.pending = p.pending[1:]
+			p.mu.Unlock()
+			return g, true
+		}
+		p.mu.Unlock()
+		select {
+		case <-p.wake:
+		case <-ctx.Done():
+			return model.Game{}, false
+		}
+	}
 }
 
 // slotsFor is how many unpacked copies may exist at once, which is the depth
@@ -128,12 +182,13 @@ func (s *Services) StartPrefetch(ctx context.Context, games []model.Game, depth 
 // what depth 2 was always supposed to mean.
 func slotsFor(depth int) int { return depth }
 
-func (p *Prefetcher) run(ctx context.Context, games []model.Game, slots chan struct{}) {
+func (p *Prefetcher) run(ctx context.Context, slots chan struct{}) {
 	defer close(p.done)
 	log := logging.ContextLogger(ctx)
-	for _, g := range games {
-		if g.ArchiveMember == "" {
-			continue // nothing to unpack
+	for {
+		g, ok := p.nextPending(ctx)
+		if !ok {
+			return
 		}
 		select {
 		case slots <- struct{}{}:
@@ -252,6 +307,7 @@ func (p *Prefetcher) Stop() {
 	p.mu.Lock()
 	p.stopped = true
 	p.expect = map[string]bool{}
+	p.pending = nil
 	held := p.ready
 	p.ready = map[string]*PrefetchedSource{}
 	for k, w := range p.waiters {
@@ -259,6 +315,12 @@ func (p *Prefetcher) Stop() {
 		delete(p.waiters, k)
 	}
 	p.mu.Unlock()
+	// Wake the loop so it sees the stop rather than waiting for work that is
+	// no longer coming.
+	select {
+	case p.wake <- struct{}{}:
+	default:
+	}
 	for _, src := range held {
 		if src != nil && src.Release != nil {
 			src.Release()
