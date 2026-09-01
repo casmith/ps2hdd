@@ -119,10 +119,16 @@ func resolveListEntry(env *Env, ctx context.Context, c catalog.Catalog, query st
 		return model.Game{}, false, ambiguous(query, m)
 	}
 	e, err := resolveSourceEntry(c, query)
-	if err != nil {
-		return model.Game{}, false, err
+	if err == nil {
+		return sourceView(e), e.Installed, nil
 	}
-	return sourceView(e), e.Installed, nil
+	// Last: the serial carried inside a line that is not a bare name.
+	if id := serialIn(query); id != "" {
+		if e2, err2 := resolveSourceEntry(c, id); err2 == nil {
+			return sourceView(e2), e2.Installed, nil
+		}
+	}
+	return model.Game{}, false, err
 }
 
 // sourceView is the side of an entry an install acts on: the image path rather

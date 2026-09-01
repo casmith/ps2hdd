@@ -74,3 +74,50 @@ func TestReadGameListTreatsHashAsAComment(t *testing.T) {
 		t.Fatalf("got %+v", got)
 	}
 }
+
+// A list is very often assembled by pasting rows out of `ps2hdd list`, which
+// is a reasonable way to build one. Such a line matches no title, no filename
+// and no serial when taken whole -- but it carries one, and a serial names
+// exactly one game.
+func TestSerialInPastedListRows(t *testing.T) {
+	rows := []struct{ line, want string }{
+		{"PS2     Arc the Lad - End of Darkness    SLUS_211.65  3.0 GiB   Installed + source  1 missing (LGO)", "SLUS_211.65"},
+		{"PS2     Devil May Cry 2 [Disc 1]         SLUS_204.84  4.5 GiB   Installed + source", "SLUS_204.84"},
+		{"PS1     Metal Gear Solid                 SLUS_005.94  2.1 MiB   Installed", "SLUS_005.94"},
+		// The dashed form community databases use.
+		{"Ico (USA) [SCUS-97113]", "SCUS_971.13"},
+	}
+	for _, r := range rows {
+		if got := serialIn(r.line); got != r.want {
+			t.Errorf("serialIn(%.40q) = %q, want %q", r.line, got, r.want)
+		}
+	}
+}
+
+// A bare serial is not "a line carrying a serial": it already resolves on its
+// own, and reporting it here would put the fallback in front of the direct
+// lookup for no reason.
+func TestSerialInIgnoresABareSerial(t *testing.T) {
+	for _, q := range []string{"SLUS_211.65", "  SLUS-21165  ", "slus_211.65"} {
+		if got := serialIn(q); got != "" {
+			t.Errorf("serialIn(%q) = %q, want empty: it is already a serial", q, got)
+		}
+	}
+}
+
+// A line with nothing serial-shaped in it has nothing to fall back to, and
+// must not be turned into a match by accident.
+func TestSerialInFindsNothingInPlainText(t *testing.T) {
+	for _, q := range []string{
+		"Gran Turismo 4",
+		"Complete Nonsense Here",
+		"",
+		"Ridge Racer V.iso",
+		// Numbers that are not a serial: no letter run in front of them.
+		"Game 2 - 100 200",
+	} {
+		if got := serialIn(q); got != "" {
+			t.Errorf("serialIn(%q) = %q, want empty", q, got)
+		}
+	}
+}
