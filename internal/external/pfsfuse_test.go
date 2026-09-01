@@ -108,7 +108,9 @@ PP.HDL.Burnout 3
 
 func TestMkPartScript(t *testing.T) {
 	got := MkPartScript("/dev/sdc", "__.POPS", "20G", "PFS")
-	want := "device /dev/sdc\nmkpart __.POPS 20G PFS\nexit\n"
+	// The name is quoted because pfsshell splits on whitespace, and an HDL
+	// partition is named after its game.
+	want := "device /dev/sdc\nmkpart \"__.POPS\" 20G PFS\nexit\n"
 	if got != want {
 		t.Errorf("MkPartScript = %q, want %q", got, want)
 	}
@@ -207,5 +209,47 @@ There are data after the end of archive
 		Stderr: "hdd: PS2 APA Driver v2.5 (c) 2003 Vector\n(!) hdd0:+OPL: No such file or directory.\n"}
 	if !strings.Contains(plain.Error(), "No such file or directory") {
 		t.Errorf("error does not carry pfsfuse's message:\n%s", plain.Error())
+	}
+}
+
+// hdl_dump has no verb for removing a game. It had one -- CMD_HIDE, spelled
+// "delete" -- and upstream compiled it out (`#undef INCLUDE_HIDE_CMD`, with the
+// comment "Hide function is malfunction"). A build without it prints its usage
+// and exits 100, which is what every removal did. pfsshell's rmpart is the
+// replacement, and it is the same tool that creates partitions here.
+func TestRmPartScript(t *testing.T) {
+	got := RmPartScript("/dev/sdc", "PP.SLUS_210.50.Burnout 3 Takedow")
+	want := "device /dev/sdc\nrmpart \"PP.SLUS_210.50.Burnout 3 Takedow\"\nexit\n"
+	if got != want {
+		t.Errorf("RmPartScript =\n%q\nwant\n%q", got, want)
+	}
+}
+
+// The quoting is the whole point. An HDL partition is named after its game, so
+// it almost always contains spaces, and pfsshell splits on whitespace unless a
+// token is quoted (util.c, parse_line). Unquoted, rmpart received "PP.SLUS_210.50.Burnout"
+// and removed nothing.
+func TestPFSScriptsQuoteNamesWithSpaces(t *testing.T) {
+	for _, name := range []string{
+		"PP.SLUS_210.50.Burnout 3 Takedow",
+		"PP.SCUS_974.72.Shadow of the Col",
+		"__.POPS",
+	} {
+		for _, script := range []string{
+			RmPartScript("/dev/sdc", name),
+			MkPartScript("/dev/sdc", name, "20G", "PFS"),
+		} {
+			if !strings.Contains(script, `"`+name+`"`) {
+				t.Errorf("name %q is not quoted in:\n%s", name, script)
+			}
+			// And the command still starts the line, so the shell sees it.
+			for _, line := range strings.Split(script, "\n") {
+				if strings.HasPrefix(line, "rmpart") || strings.HasPrefix(line, "mkpart") {
+					if !strings.Contains(line, `"`) {
+						t.Errorf("command line carries no quotes: %q", line)
+					}
+				}
+			}
+		}
 	}
 }

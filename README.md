@@ -397,6 +397,18 @@ time.
 the drive are skipped — the same answer a saved position would have given, and
 one that cannot go stale.
 
+**Removing a PS2 game goes through pfsshell, not hdl_dump.** hdl_dump has no
+verb for it: it had one — `CMD_HIDE`, spelled `delete` — and upstream compiled
+it out, with `#undef INCLUDE_HIDE_CMD /*Hide function is malfunction*/` in
+`config.h`. A build without it does not recognise the word, prints its usage and
+exits 100. `pfsshell`'s `rmpart` is the replacement, and it is the same tool
+that creates partitions here, for the same reason: the reference implementation
+decides how APA space is laid out.
+
+pfsshell is a shell, so it exits 0 whether or not the command inside it worked.
+The removal is confirmed by reading the partition table back, never by trusting
+the exit status.
+
 ### Removing in bulk
 
 The same list takes them off again:

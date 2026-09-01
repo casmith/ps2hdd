@@ -14,8 +14,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -322,14 +324,14 @@ func writeSparse(path string, data []byte) error {
 }
 
 // handle stands in for the external tools.
-// failSubstring names a title the fake hdl_dump should refuse to inject.
+// failSubstring names a title the fake tools should refuse to act on.
 //
-// It exists so the demo can exercise a failing install, which is the one shape
-// the synthetic environment cannot produce on its own: the fake never reads
-// the source image, so corrupting or deleting one changes nothing. What needs
-// testing is not the failure but what happens around it -- that a batch of
-// several hundred titles carries on past a bad one -- and that cannot be
-// tested without a bad one.
+// It exists so the demo can exercise failures it cannot produce on its own:
+// the fake hdl_dump never reads the source image, so corrupting one changes
+// nothing, and the fake pfsshell always succeeds. What needs testing is not
+// the failure but what happens around it -- that a batch carries on past a bad
+// title, and that a pfsshell which exits 0 having done nothing is caught by
+// reading the partition table back -- and neither can be tested without one.
 const failEnv = "PS2HDD_DEMO_FAIL"
 
 func (e *Env) handle(c external.Command) (external.Result, error) {
@@ -349,6 +351,8 @@ func (e *Env) handle(c external.Command) (external.Result, error) {
 		return external.Result{}, e.unmount(c.Args)
 	case external.HDLDumpTool:
 		return e.hdlDump(c)
+	case external.PFSShellTool:
+		return e.pfsShell(c)
 	case external.SevenZipTool, external.SevenZipAltTool:
 		// Archives are the one thing worth doing for real. 7z only reads the
 		// source library and writes into scratch -- it never touches the
@@ -436,29 +440,137 @@ func (e *Env) hdlDump(c external.Command) (external.Result, error) {
 		e.mu.Unlock()
 		return external.Result{}, e.writeImage()
 
-	case "delete":
-		if len(c.Args) < 3 {
-			return external.Result{}, fmt.Errorf("hdl_dump: malformed delete command")
-		}
-		partition := c.Args[2]
-		e.mu.Lock()
-		kept := e.disk.Games[:0]
-		found := false
-		for _, g := range e.disk.Games {
-			if apasynth.SanitizePartitionName(g.Startup, g.Name) == partition {
-				found = true
-				continue
-			}
-			kept = append(kept, g)
-		}
-		e.disk.Games = append([]apasynth.Game(nil), kept...)
-		e.mu.Unlock()
-		if !found {
-			return external.Result{}, fmt.Errorf("hdl_dump: partition %q not found", partition)
-		}
-		return external.Result{}, e.writeImage()
 	}
 	return external.Result{}, nil
+}
+
+// pfsShell stands in for pfsshell, which is driven through stdin rather than
+// argv.
+//
+// It exists because removing a game goes through `rmpart`. hdl_dump has no verb
+// for that -- upstream compiled its "delete" out -- and the demo used to fake
+// the missing verb, so every removal passed here and failed on real hardware.
+// A fake that answers a command the real tool rejects is worse than no fake:
+// it turns the one place that would have caught this into evidence that
+// nothing was wrong.
+//
+// Like the real thing it exits 0 regardless; callers confirm by re-reading the
+// partition table.
+func (e *Env) pfsShell(c external.Command) (external.Result, error) {
+	if c.Stdin == nil {
+		return external.Result{}, nil
+	}
+	script, err := io.ReadAll(c.Stdin)
+	if err != nil {
+		return external.Result{}, err
+	}
+	// An injected failure models pfsshell's real one: it prints the error and
+	// still exits 0, so nothing but re-reading the partition table can tell
+	// that the command did not work. That check is the point of the hook.
+	if want := os.Getenv(failEnv); want != "" && strings.Contains(string(script), want) {
+		return external.Result{Stdout: "(!) demo: injected failure.\n"}, nil
+	}
+	var out strings.Builder
+	for _, line := range strings.Split(string(script), "\n") {
+		fields := splitPFSLine(line)
+		if len(fields) == 0 {
+			continue
+		}
+		switch fields[0] {
+		case "rmpart":
+			if len(fields) < 2 {
+				out.WriteString("(!) Exit code is -1.\n")
+				continue
+			}
+			if !e.removePartition(fields[1]) {
+				out.WriteString("(!) Exit code is -1.\n")
+			}
+		case "mkpart":
+			if len(fields) < 3 {
+				out.WriteString("(!) Exit code is -1.\n")
+				continue
+			}
+			if !e.addPartition(fields[1], fields[2]) {
+				out.WriteString("(!) Exit code is -1.\n")
+			}
+		}
+	}
+	return external.Result{Stdout: out.String()}, e.writeImage()
+}
+
+// splitPFSLine splits a pfsshell command line, honouring the quotes a name
+// with spaces in it needs.
+func splitPFSLine(line string) []string {
+	var out []string
+	var cur strings.Builder
+	inQuote := false
+	for _, r := range strings.TrimSpace(line) {
+		switch {
+		case r == '"':
+			inQuote = !inQuote
+		case (r == ' ' || r == '\t') && !inQuote:
+			if cur.Len() > 0 {
+				out = append(out, cur.String())
+				cur.Reset()
+			}
+		default:
+			cur.WriteRune(r)
+		}
+	}
+	if cur.Len() > 0 {
+		out = append(out, cur.String())
+	}
+	return out
+}
+
+// removePartition takes a game or a PFS partition out of the synthetic table.
+func (e *Env) removePartition(name string) bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	games := e.disk.Games[:0]
+	found := false
+	for _, g := range e.disk.Games {
+		if apasynth.SanitizePartitionName(g.Startup, g.Name) == name {
+			found = true
+			continue
+		}
+		games = append(games, g)
+	}
+	e.disk.Games = append([]apasynth.Game(nil), games...)
+	if found {
+		return true
+	}
+	parts := e.disk.Parts[:0]
+	for _, p := range e.disk.Parts {
+		if strings.EqualFold(p.ID, name) {
+			found = true
+			continue
+		}
+		parts = append(parts, p)
+	}
+	e.disk.Parts = append([]apasynth.PFSPart(nil), parts...)
+	return found
+}
+
+// addPartition creates a PFS partition, for `mkpart`. The size is pfsshell's
+// own form: a whole number followed by M or G.
+func (e *Env) addPartition(name, size string) bool {
+	mb, err := strconv.Atoi(strings.TrimRight(size, "MmGg"))
+	if err != nil || mb <= 0 {
+		return false
+	}
+	if strings.HasSuffix(strings.ToUpper(size), "G") {
+		mb *= 1024
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for _, p := range e.disk.Parts {
+		if strings.EqualFold(p.ID, name) {
+			return false
+		}
+	}
+	e.disk.Parts = append(e.disk.Parts, apasynth.PFSPart{ID: name, SizeMB: uint32(mb)})
+	return true
 }
 
 func partitionDir(id string) string {
