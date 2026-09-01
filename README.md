@@ -599,6 +599,21 @@ setting itself off forever. A hand-pushed `v*` tag still works and takes the
 same path, creating the release itself, which is what keeps an out-of-band
 release possible.
 
+**A release is visible for a minute or two before its binaries are on it.** That
+window is why the install instructions use `curl -fLO`: without `-f`, curl writes
+the 404 body to the file and `install` marks nine bytes of `Not Found`
+executable.
+
+Closing the window by publishing as a draft was tried and reverted. A draft
+release has no git tag — GitHub creates the tag when the release is published —
+and release-please identifies its own last release by tag. With none to find it
+fell back to the manifest for the version but had no commit baseline, so it
+reconsidered all 82 commits, found `feat:` among them, and proposed a minor bump
+whose changelog was the entire history. Every merge did it again.
+
+The window is a bad download that now fails loudly. The draft was a broken
+release process. `-f` was always the fix that mattered.
+
 The version reaches the binary through `-X main.version`, so it is only ever as
 good as `git describe` — with no tags at all it degrades to a bare commit hash,
 silently. The workflow asserts `--version` contains the tag rather than trusting
