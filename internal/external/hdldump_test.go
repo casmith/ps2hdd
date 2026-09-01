@@ -192,19 +192,6 @@ func TestInstallArgsRequiresFields(t *testing.T) {
 	}
 }
 
-func TestRemoveArgs(t *testing.T) {
-	args, err := RemoveArgs("/dev/x", "PP.SLUS_210.50.Burnout 3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !equal(args, []string{"delete", "/dev/x", "PP.SLUS_210.50.Burnout 3"}) {
-		t.Errorf("args = %v", args)
-	}
-	if _, err := RemoveArgs("/dev/x", ""); err == nil {
-		t.Error("RemoveArgs accepted an empty partition name")
-	}
-}
-
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

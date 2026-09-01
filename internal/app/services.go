@@ -459,10 +459,10 @@ func (s *Services) Tools() []ToolStatus {
 		required      bool
 	}{
 		{"lsblk", "enumerating block devices for `detect`", true},
-		{external.HDLDumpTool, "installing and removing PS2 games", false},
+		{external.HDLDumpTool, "installing PS2 games", false},
 		{external.PFSFuseTool, "mounting +OPL and __.POPS", false},
 		{external.FusermountTool, "unmounting PFS partitions", false},
-		{external.PFSShellTool, "cross-checking the partition list", false},
+		{external.PFSShellTool, "removing PS2 games, creating partitions, cross-checking the partition list", false},
 	}
 	out := make([]ToolStatus, 0, len(defs)+1)
 	for _, d := range defs {

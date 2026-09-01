@@ -227,36 +227,6 @@ func ParseHDLProgress(line string) (float64, bool) {
 	return float64(pct) / 100, true
 }
 
-// RemoveArgs builds the argument vector for removing a game.
-//
-// hdl_dump's removal verb is "delete", and it takes either a partition name or
-// a game name (hdl_dump.c: CMD_HIDE). ps2hdd always passes the partition name,
-// which is unambiguous; matching by title is done on our side so the user can
-// be shown exactly what will go.
-func RemoveArgs(device, partition string) ([]string, error) {
-	if device == "" {
-		return nil, fmt.Errorf("remove: no device")
-	}
-	if partition == "" {
-		return nil, fmt.Errorf("remove: no partition name")
-	}
-	return []string{"delete", device, partition}, nil
-}
-
-// Remove deletes an installed game's partition.
-func (h HDLDump) Remove(ctx context.Context, device, partition string) error {
-	args, err := RemoveArgs(device, partition)
-	if err != nil {
-		return err
-	}
-	_, err = h.Runner.Run(ctx, Command{
-		Name:       HDLDumpTool,
-		Args:       args,
-		Privileged: true,
-	})
-	return err
-}
-
 // CDVDInfo is the parsed output of `hdl_dump cdvd_info2 <image> --csv`.
 type CDVDInfo struct {
 	MediaType model.MediaType

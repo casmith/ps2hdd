@@ -443,6 +443,19 @@ step "unmount refuses a path it did not create"
 grep -q "refusing to unmount" "$WORK/badunmount.txt" \
   || fail "unmount did not refuse a path outside its own runtime directory"
 
+step "a pfsshell that exits 0 having done nothing is caught"
+# Removing a game goes through pfsshell's rmpart, and pfsshell is a shell: it
+# exits 0 whether or not the command inside it worked. The only trustworthy
+# confirmation is reading the partition table back, which is what this checks.
+ps2hdd install --from-source "Gran Turismo 4"
+PS2HDD_DEMO_FAIL="Gran Turismo" ps2hdd remove "Gran Turismo 4" > "$WORK/rm-silent.txt" 2>&1 \
+  && fail "a removal that did nothing reported success" || true
+grep -q "did not remove" "$WORK/rm-silent.txt" \
+  || fail "the failure was not detected: $(cat "$WORK/rm-silent.txt")"
+ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
+  || fail "the title vanished despite pfsshell doing nothing"
+ps2hdd remove "Gran Turismo 4"
+
 step "no mounts were left behind"
 if [ -d "$XDG_RUNTIME_DIR/ps2hdd" ]; then
   # Per-process directories (mnt-<pid>) must all be gone; the shared "mnt"

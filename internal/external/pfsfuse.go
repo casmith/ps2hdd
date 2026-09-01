@@ -121,7 +121,7 @@ func (p PFS) ListPartitions(ctx context.Context, device string) ([]string, error
 // sub-partitions, and pfsshell decides that split itself. Reproducing that
 // allocation here is exactly what this package exists to avoid.
 func MkPartScript(device, name, size, fstype string) string {
-	return "device " + device + "\nmkpart " + name + " " + size + " " + fstype + "\nexit\n"
+	return "device " + device + "\nmkpart " + quotePFSArg(name) + " " + size + " " + fstype + "\nexit\n"
 }
 
 // CreatePartition creates a PFS partition through pfsshell and returns
@@ -137,6 +137,49 @@ func (p PFS) CreatePartition(ctx context.Context, device, name, size, fstype str
 		Name:       PFSShellTool,
 		Privileged: true,
 		Stdin:      strings.NewReader(MkPartScript(device, name, size, fstype)),
+	})
+	return res.Stdout + res.Stderr, err
+}
+
+// RmPartScript builds the pfsshell command script that removes one partition.
+//
+// hdl_dump has no verb for this. It had one -- CMD_HIDE, spelled "delete" --
+// and upstream compiled it out: config.h carries `#undef INCLUDE_HIDE_CMD`
+// with the comment "Hide function is malfunction". A build without it does not
+// recognise the word, prints its usage and exits 100, which is what removing a
+// game did.
+//
+// pfsshell has rmpart, and it is the same tool that creates partitions here for
+// the same reason: the reference implementation decides how APA space is laid
+// out, and this package exists to avoid reimplementing that.
+func RmPartScript(device, name string) string {
+	return "device " + device + "\nrmpart " + quotePFSArg(name) + "\nexit\n"
+}
+
+// quotePFSArg wraps a pfsshell argument in double quotes.
+//
+// An HDL partition is named after its game -- PP.SLUS_210.50.Burnout 3 Takedow
+// -- so it usually contains spaces, and pfsshell splits on whitespace unless a
+// token is quoted (util.c, parse_line). Unquoted, `rmpart` received the first
+// word and did nothing.
+//
+// A quote inside the name has no escape in that parser: it returns -1 for a
+// quote in the middle of a token. Names come from the APA table rather than
+// from a user, so this has nowhere to arise, and leaving it unquoted would be
+// worse than the caller seeing a name it cannot pass on.
+func quotePFSArg(s string) string { return `"` + s + `"` }
+
+// RemovePartition deletes an APA partition through pfsshell and returns
+// everything the shell printed.
+//
+// As with CreatePartition the exit status is worthless -- pfsshell is a shell,
+// and it exits 0 whether or not the command inside it worked -- so the caller
+// must confirm by re-reading the partition table.
+func (p PFS) RemovePartition(ctx context.Context, device, name string) (string, error) {
+	res, err := p.Runner.Run(ctx, Command{
+		Name:       PFSShellTool,
+		Privileged: true,
+		Stdin:      strings.NewReader(RmPartScript(device, name)),
 	})
 	return res.Stdout + res.Stderr, err
 }

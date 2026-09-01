@@ -33,7 +33,11 @@ type RemoveReport struct {
 	Files []string `json:"files,omitempty"`
 	// Assets lists artwork removed, when PurgeAssets was set.
 	Assets []string `json:"assets,omitempty"`
-	DryRun bool     `json:"dry_run,omitempty"`
+	// Script is the pfsshell input that was, or would be, fed in.
+	Script string `json:"script,omitempty"`
+	// Output is everything pfsshell printed, kept so a failure can be read.
+	Output string `json:"output,omitempty"`
+	DryRun bool   `json:"dry_run,omitempty"`
 }
 
 // FindInstalled resolves a user-supplied name or serial to exactly one
@@ -110,11 +114,8 @@ func (s *Services) removePS2(ctx context.Context, g model.Game, opts RemoveOptio
 	if err != nil {
 		return rep, err
 	}
-	args, err := external.RemoveArgs(t.Path, g.PartitionName)
-	if err != nil {
-		return rep, err
-	}
-	rep.Commands = append(rep.Commands, append([]string{external.HDLDumpTool}, args...))
+	rep.Script = external.RmPartScript(t.Path, g.PartitionName)
+	rep.Commands = append(rep.Commands, []string{external.PFSShellTool})
 	if opts.PurgeAssets {
 		names, err := s.assetPaths(ctx, g)
 		if err == nil {
@@ -129,8 +130,19 @@ func (s *Services) removePS2(ctx context.Context, g model.Game, opts RemoveOptio
 	defer unlock()
 
 	opts.OnProgress.report(StageRemoving, -1, g.Title)
-	if err := s.HDL.Remove(ctx, t.Path, g.PartitionName); err != nil {
-		return rep, err
+	out, runErr := s.PFS.RemovePartition(ctx, t.Path, g.PartitionName)
+	rep.Output = out
+	if runErr != nil {
+		return rep, fmt.Errorf("run pfsshell: %w", runErr)
+	}
+	// pfsshell exits 0 whether or not the command inside it worked, so the
+	// only trustworthy confirmation is reading the table back.
+	switch still, err := s.hasPartition(t, g.PartitionName); {
+	case err != nil:
+		return rep, fmt.Errorf("confirm %s was removed: %w", g.PartitionName, err)
+	case still:
+		return rep, fmt.Errorf("pfsshell did not remove %s. It reported:\n%s",
+			g.PartitionName, strings.TrimSpace(out))
 	}
 	logging.ContextLogger(ctx).Info("removed PS2 game",
 		"title", g.Title, "id", g.GameID, "partition", g.PartitionName)
