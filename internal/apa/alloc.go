@@ -60,6 +60,16 @@ func MaxAllocationFor(imageBytes int64) int64 {
 	return int64(n) * ChunkMB * 1024 * 1024
 }
 
+// MinAllocationFor is the least an image of this size can occupy: the chunks
+// needed to cover it, with no overhead charged at all.
+//
+// Nothing allocates this little -- overhead is always charged -- but it is a
+// floor the arithmetic must never fall below, and a real allocation that comes
+// in under it means the model is wrong rather than merely imprecise.
+func MinAllocationFor(imageBytes int64) int64 {
+	return int64(chunksToCover(imageBytes)) * ChunkMB * 1024 * 1024
+}
+
 // megabytes rounds up to whole megabytes, as hdl.c:1012 does.
 func megabytes(b int64) int64 {
 	const mb = int64(1024 * 1024)

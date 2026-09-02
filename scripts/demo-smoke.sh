@@ -38,6 +38,20 @@ ps2hdd status | tee "$WORK/status.txt"
 grep -q "APA *detected" "$WORK/status.txt" || fail "APA not detected"
 grep -q "+OPL *detected" "$WORK/status.txt" || fail "+OPL not detected"
 
+step "doctor checks the space model against the drive"
+# The demo cannot validate the model -- apasynth allocates at exactly the
+# minimum, so it never exercises the overhead rule -- but it can check that the
+# audit runs, measures every partition, and reports no disagreement where there
+# is none. The real test is a drive hdl_dump filled.
+ps2hdd doctor --json > "$WORK/doctor.json" 2>/dev/null || true
+python3 -c '
+import json, sys
+a = json.load(open(sys.argv[1]))["allocation"]
+assert a["checked"], "audit did not run"
+assert a["total"] > 0, "no partitions measured"
+assert not a.get("outside"), "unexpected disagreement: %s" % a["outside"]
+' "$WORK/doctor.json" || fail "the space model audit did not run cleanly"
+
 step "the synthetic library is readable"
 ps2hdd list --no-artwork | tee "$WORK/list.txt"
 grep -q "Burnout 3 Takedown" "$WORK/list.txt" || fail "installed PS2 title missing"
