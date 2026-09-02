@@ -33,6 +33,8 @@ type DoctorReport struct {
 	Provider  DoctorProvider        `json:"asset_provider"`
 	PS1       ps1.Readiness         `json:"ps1"`
 	Launchers app.LauncherAudit     `json:"ps1_launchers"`
+	// Allocation holds the space model against the drive's real partitions.
+	Allocation app.AllocationAudit `json:"allocation"`
 	// ScratchBytes is space left behind by a run that was killed before its
 	// cleanup could run.
 	ScratchDirs  int   `json:"scratch_dirs,omitempty"`
@@ -213,6 +215,13 @@ func buildDoctorReport(ctx context.Context, env *Env) DoctorReport {
 	}
 
 	if rep.Device.OK {
+		// The space model is arithmetic taken from hdl_dump's source and never
+		// run against it. An installed drive is the one place it can be
+		// checked, so it is checked on every doctor run rather than trusted.
+		if a, err := env.Svc.AuditAllocations(ctx); err == nil {
+			rep.Allocation = a
+			rep.Problems = append(rep.Problems, a.Explain()...)
+		}
 		if ready, err := env.Svc.PS1Readiness(ctx); err == nil {
 			rep.PS1 = ready
 			if !ready.Ready() {
@@ -319,6 +328,7 @@ func renderDoctor(env *Env, rep DoctorReport) {
 			{ps1.POPSPartition, boolLabel(rep.Device.HasPOPS, "OK", "missing")},
 			{ps1.CommonPartition, boolLabel(rep.Device.HasCommon, "OK", "missing")},
 			{"PS1 launchers", launcherLabel(rep.Launchers)},
+			{"Space model", allocationLabel(rep.Allocation)},
 			{"PS2 games", fmt.Sprintf("%d", rep.Device.PS2Games)},
 			{"PS1 games", fmt.Sprintf("%d", rep.Device.PS1Games)},
 		})
@@ -430,5 +440,19 @@ func launcherLabel(a app.LauncherAudit) string {
 		return green(fmt.Sprintf("OK (%d)", a.Installed))
 	default:
 		return amber(fmt.Sprintf("%d of %d unlistable", len(a.Missing)+len(a.TooLong), a.Installed))
+	}
+}
+
+// allocationLabel summarises the space model check.
+func allocationLabel(a app.AllocationAudit) string {
+	switch {
+	case !a.Checked:
+		return dim("unknown")
+	case a.Total == 0:
+		return dim("no installed PS2 games")
+	case a.OK():
+		return green(fmt.Sprintf("agrees with %d partition(s)", a.Total))
+	default:
+		return amber(fmt.Sprintf("%d of %d disagree", len(a.Outside), a.Total))
 	}
 }
