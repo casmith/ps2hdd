@@ -106,6 +106,17 @@ jobs:
           ## Install
 
           \`\`\`sh
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh -s -- ${version}
+          \`\`\`
+
+          The script checks the architecture and the checksum, waits out a
+          download that is not there yet, and does all of its work inside a
+          function called on its last line, so a transfer cut partway runs
+          nothing. Save and read it first if you would rather.
+
+          Or by hand:
+
+          \`\`\`sh
           base=https://github.com/${{ github.repository }}/releases/download/${version}
           curl -fLO --retry 3 \$base/ps2hdd-linux-amd64
           curl -fLO --retry 3 \$base/SHA256SUMS

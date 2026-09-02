@@ -104,6 +104,30 @@ BIN/CUE to VCD conversion is built in; no `cue2pops` needed.
 A static binary, no runtime dependencies:
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/casmith/ps2hdd/main/scripts/install.sh | sh
+```
+
+Or pinned to a version, or saved and read first:
+
+```sh
+curl -fsSL .../install.sh | sh -s -- v0.7.3
+curl -fsSLO .../install.sh && less install.sh && sh install.sh
+```
+
+It picks the right architecture, verifies the checksum **before** installing,
+retries a download that is not there yet, and uses `sudo` only if the
+destination actually needs it. `PREFIX` chooses where it goes.
+
+The script is POSIX `sh` rather than bash, because `/bin/sh` is dash on Debian
+and Ubuntu and `set -o pipefail` is a syntax error there. And all of its work
+happens inside a function called on the last line, so a download cut partway
+defines an incomplete function and never runs it — piping a script into a shell
+otherwise executes each line as it arrives, and a dropped connection leaves
+whatever had been read already done.
+
+Or by hand, which is the same four steps:
+
+```sh
 base=https://github.com/casmith/ps2hdd/releases/latest/download
 curl -fLO --retry 3 $base/ps2hdd-linux-amd64
 curl -fLO --retry 3 $base/SHA256SUMS
