@@ -106,12 +106,13 @@ jobs:
           ## Install
 
           \`\`\`sh
-          curl -fsSLO https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh
-          bash install.sh ${version}
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh -s -- ${version}
           \`\`\`
 
-          The script checks the architecture and the checksum, and waits out a
-          download that is not there yet. Read it first; it is short.
+          The script checks the architecture and the checksum, waits out a
+          download that is not there yet, and does all of its work inside a
+          function called on its last line, so a transfer cut partway runs
+          nothing. Save and read it first if you would rather.
 
           Or by hand:
 

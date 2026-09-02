@@ -36,7 +36,17 @@ step() { printf '\n=== %s\n' "$*"; }
 step "the install script is syntactically sound"
 # It is the first thing a new user runs, and nothing else here would notice it
 # breaking.
-bash -n "$(dirname "$0")/install.sh" || fail "scripts/install.sh does not parse"
+sh -n "$(dirname "$0")/install.sh" || fail "scripts/install.sh is not valid POSIX sh"
+# Piped into a shell, a transfer cut partway must run nothing: every line of
+# work is inside a function called on the last line.
+# Checked on the output, not on whether a file appeared: a truncated script
+# that starts downloading has already failed the property, long before it gets
+# far enough to install anything.
+head -c $(( $(wc -c < "$(dirname "$0")/install.sh") * 90 / 100 )) "$(dirname "$0")/install.sh" \
+  | PREFIX="$WORK/trunc" sh > "$WORK/trunc.txt" 2>&1 || true
+grep -q "Installing ps2hdd" "$WORK/trunc.txt" \
+  && fail "a truncated install script began work: $(cat "$WORK/trunc.txt")" || true
+test -e "$WORK/trunc" && fail "a truncated install script installed something" || true
 
 step "status"
 ps2hdd status | tee "$WORK/status.txt"
