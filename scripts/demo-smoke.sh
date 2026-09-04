@@ -233,6 +233,39 @@ ps2hdd list --ps2 --installed --no-artwork | grep -q "Gran Turismo 4" \
   || fail "the serial path did not install the title"
 ps2hdd config set install.prefetch 2
 
+step "a multi-disc PS1 release with one archive per disc"
+# The usual shape in the wild: Chrono_Cross_CD1.part1.rar beside
+# Chrono_Cross_CD2.part1.rar. Every disc carries the archive it came out of, and
+# extracting only the title's own archive found disc 1 and then failed looking
+# for disc 2 inside it.
+MD="$WORK/multidisc"
+mkdir -p "$MD"
+# The member names inside the two archives are deliberately identical. Two
+# archives are free to hold files of the same name, and unpacking them into one
+# directory would have disc 2 overwrite disc 1 -- so each gets its own.
+for n in 1 2; do
+  mkdir -p "$MD/d$n"
+  cp "$DEMO/sources/psx/Metal Gear Solid/Disc $n.bin" "$MD/d$n/disc.bin"
+  cp "$DEMO/sources/psx/Metal Gear Solid/Disc $n.cue" "$MD/d$n/disc.cue"
+  sed -i "s|FILE \"[^\"]*\"|FILE \"disc.bin\"|" "$MD/d$n/disc.cue"
+  (cd "$MD/d$n" && 7z a -mx=0 -bso0 -bsp0 "$DEMO/sources/psx/MGS_CD$n.7z" disc.bin disc.cue >/dev/null)
+done
+# The loose copy is moved aside, not deleted, so the release is reachable only
+# through its archives here and is still there for the steps that follow.
+mv "$DEMO/sources/psx/Metal Gear Solid" "$MD/loose"
+ps2hdd install --from-source "MGS" > "$MD/out.txt" 2>&1 \
+  || fail "a one-archive-per-disc release did not install: $(cat "$MD/out.txt")"
+ls "$DEMO/partitions/pops/" | grep -q "MGS_CD1.VCD" || fail "disc 1 was not installed"
+ls "$DEMO/partitions/pops/" | grep -q "MGS_CD2.VCD" || fail "disc 2 was not installed"
+# Each archive is unpacked on its own, so two of them may hold files of the same
+# name without one overwriting the other.
+cd1=$(sha256sum "$DEMO/partitions/pops/"*MGS_CD1.VCD | cut -d' ' -f1)
+cd2=$(sha256sum "$DEMO/partitions/pops/"*MGS_CD2.VCD | cut -d' ' -f1)
+[ "$cd1" != "$cd2" ] || fail "both discs installed as the same image"
+ps2hdd remove "MGS"
+rm -f "$DEMO/sources/psx"/MGS_CD*.7z
+mv "$MD/loose" "$DEMO/sources/psx/Metal Gear Solid"
+
 step "install a multi-disc PS1 title"
 ps2hdd install \
   "$DEMO/sources/psx/Metal Gear Solid/Disc 1.cue" \
