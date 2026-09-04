@@ -35,6 +35,25 @@ type PFS struct {
 // Available reports the resolved path to pfsfuse, if it is installed.
 func (p PFS) Available() (string, bool) { return Available(p.Runner, PFSFuseTool) }
 
+// singleThreaded forces FUSE to serve one request at a time.
+//
+// pfsfuse wraps the ps2sdk PFS and APA drivers, which are IOP code: one global
+// mount state and one shared pool of buffers, written on the assumption that
+// nothing else is running. Its own banner says so -- "Max mount: 1, Max open:
+// 32, Number of buffers: 127". FUSE dispatches reads in parallel by default
+// and calls straight into that, and the buffers are handed to whichever
+// request arrives next.
+//
+// The symptom is silent: reads succeed and return the wrong bytes. Hashing one
+// 748 MB file four times over a default mount gave three different answers, one
+// of which was correct; the same file under -s hashed identically every time
+// and matched a known-good copy byte for byte. The disk was never at fault --
+// reading the same range of the raw device twice gave the same hash.
+//
+// Every write ps2hdd makes to the HDD goes through the same driver, so this is
+// not only a matter of what it reads back.
+const singleThreaded = "-s"
+
 // MountArgs builds the pfsfuse argument vector. Exported and pure so the
 // generated command can be unit tested and shown by --dry-run.
 func MountArgs(device, partition, mountpoint string, allowOther bool) ([]string, error) {
@@ -47,7 +66,7 @@ func MountArgs(device, partition, mountpoint string, allowOther bool) ([]string,
 	if mountpoint == "" {
 		return nil, fmt.Errorf("mount: no mountpoint")
 	}
-	args := []string{"--partition=" + partition}
+	args := []string{singleThreaded, "--partition=" + partition}
 	if allowOther {
 		args = append(args, "-o", "allow_other")
 	}
