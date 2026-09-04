@@ -43,7 +43,9 @@ func removeList(env *Env, ctx context.Context, path string, opts app.RemoveOptio
 	if err != nil {
 		return err
 	}
-	c, warnings, err := env.Svc.Catalog(ctx)
+	scanOpts, finish := withScanProgress(env)
+	c, warnings, err := env.Svc.CatalogWith(ctx, scanOpts)
+	finish()
 	if err != nil {
 		return err
 	}

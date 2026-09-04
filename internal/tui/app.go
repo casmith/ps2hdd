@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 
@@ -44,6 +45,7 @@ type Model struct {
 	catalogErr   error
 	warnings     []error
 	loadingCat   bool
+	scan         scanProgressMsg
 	driveStatus  model.DriveStatus
 	driveErr     error
 	ps1Ready     ps1.Readiness
@@ -83,6 +85,7 @@ type Model struct {
 	// goroutines into messages the update loop can consume.
 	queueEvents chan app.QueueItem
 	assetEvents chan assetSyncProgressMsg
+	scanEvents  chan scanProgressMsg
 
 	status        string
 	statusIsError bool
@@ -163,8 +166,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		return m.handleKey(msg)
 
+	case scanProgressMsg:
+		m.scan = msg
+		return m, m.waitForScanEvent()
+
 	case catalogLoadedMsg:
 		m.loadingCat = false
+		m.scan = scanProgressMsg{}
 		m.catalogErr = msg.err
 		m.warnings = msg.warnings
 		if msg.err == nil {
@@ -189,7 +197,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case assetSyncProgressMsg:
 		m.syncDone, m.syncTotal = msg.done, msg.total
-		return m, nil
+		return m, m.waitForAssetEvent()
 
 	case assetSyncDoneMsg:
 		m.syncing = false
@@ -206,10 +214,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case queueUpdateMsg:
 		// The queue keeps its own state; the message exists so the view
 		// repaints, and so a finished install refreshes the library.
+		//
+		// Re-arming is what keeps the stream alive: a tea.Cmd delivers one
+		// message, so without this the queue reports its first event and then
+		// goes quiet, and the refresh below never fires for a later install.
 		if msg.item.State == app.QueueComplete {
-			return m, tea.Batch(m.loadCatalog(), m.loadDrive())
+			return m, tea.Batch(m.waitForQueueEvent(), m.loadCatalog(), m.loadDrive())
 		}
-		return m, nil
+		return m, m.waitForQueueEvent()
 
 	case removeDoneMsg:
 		if msg.err != nil {
@@ -675,7 +687,7 @@ func (m *Model) renderStatus() string {
 	}
 	if m.loadingCat {
 		return components.StatusLine(m.width, components.DialogConfirm,
-			components.Spinner(m.tickCount)+" reading the library…")
+			components.Spinner(m.tickCount)+" "+m.scanLabel())
 	}
 	if len(m.warnings) > 0 {
 		w := m.warnings[0]
@@ -690,6 +702,51 @@ func (m *Model) renderStatus() string {
 		return components.StatusLine(m.width, components.DialogDanger, w.Error())
 	}
 	return components.StatusLine(m.width, components.DialogConfirm, "")
+}
+
+// scanLabel describes what the library refresh is doing. Until the scan
+// reports a position there is nothing to say beyond the fact that it started;
+// after that it names the library, how far through it is and the file it has
+// reached, which is what tells a slow scan apart from a stuck one.
+func (m *Model) scanLabel() string {
+	if m.scan.total == 0 {
+		return "reading the library…"
+	}
+	src := m.svc.Config.Sources
+	lib := filepath.Base(m.scan.root)
+	switch m.scan.root {
+	case src.PS2:
+		lib = "PS2"
+	case src.PS1:
+		lib = "PS1"
+	}
+	// The filename is the first thing to give up when the terminal is narrow:
+	// the counter still says where the scan is.
+	head := fmt.Sprintf("scanning %s sources %d/%d  ", lib, m.scan.done, m.scan.total)
+	room := m.width - len(head) - 6
+	if room < 8 {
+		return strings.TrimSpace(head)
+	}
+	return head + components.StyleMuted.Render(truncateMiddle(filepath.Base(m.scan.path), room))
+}
+
+// truncateMiddle shortens a filename from the middle, keeping both the title
+// at the front and the disc number and extension at the end -- "(Disc 1).zip"
+// is exactly the part that says which of four files is being read.
+func truncateMiddle(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		if n < 0 {
+			return ""
+		}
+		return string(r[:n])
+	}
+	keep := n - 1 // one rune goes to the ellipsis
+	front := (keep + 1) / 2
+	return string(r[:front]) + "…" + string(r[len(r)-(keep-front):])
 }
 
 // helpText is deliberately compact: it has to fit inside a dialog on a
