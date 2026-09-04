@@ -329,6 +329,29 @@ VCD its own virtual memory card, so without it a save made on disc 1 is
 invisible on disc 2 — a three-disc RPG that loses your save at the disc change
 is installed and unplayable. It holds the *VCD filename*, not the title.
 
+### Artwork for a PS1 title
+
+OPL looks up an **app's** artwork by its whole boot filename, not by a serial.
+`appGetItemStartup` returns the `boot` value, `appGetImage` passes it through,
+and `hddGetImage` builds `<prefix>ART/<value>_<suffix>` (`src/appsupport.c`,
+`src/hddsupport.c`), so the file it opens is:
+
+```
++OPL/ART/SCUS_941.63.Final Fantasy VII_CD1.ELF_COV.png
+```
+
+Extension and all. Artwork under `SCUS_941.63_COV.png` is where OPL looks for
+**games**, and a PS1 title is not one — it is an Apps entry, because OPL has no
+PS1 support of its own. An Apps entry never finds it.
+
+So each image is written twice: once under the serial, which is what a
+PS1-aware frontend would want, and once under the launcher filename, which is
+what OPL actually opens. Removing a title with `--purge-assets` deletes both.
+
+The size OPL shows for a PS1 entry is the **launcher's**, not the game's — a
+couple of hundred kilobytes, because that is how big a copy of `POPSTARTER.ELF`
+is. It says nothing about the VCD.
+
 ### Widescreen
 
 `ps2hdd install --widescreen` writes `$WIDESCREEN` into each disc's

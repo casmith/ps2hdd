@@ -20,6 +20,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/pfs"
+	"github.com/casmith/ps2hdd/internal/platform/ps1"
 )
 
 // Manager plans and performs artwork synchronisation.
@@ -54,6 +55,28 @@ type PlanItem struct {
 	// Exists records that the file is already present, which happens when
 	// Overwrite is on.
 	Exists bool `json:"exists,omitempty"`
+}
+
+// AppBootName is the launcher filename a PS1 title reaches OPL's Apps page
+// under, or "" for anything that is not one.
+//
+// It is derived from the installed VCD rather than from the title, because the
+// launcher is named after the VCD and OPL keys the artwork off the launcher. A
+// title that is not installed yet has no VCD name and so no app artwork to
+// write; syncing again after installing picks it up.
+func AppBootName(g model.Game) string {
+	if g.Platform != model.PlatformPS1 {
+		return ""
+	}
+	for _, d := range g.Discs {
+		if d.Number <= 1 && d.InstalledName != "" {
+			return ps1.LauncherELFName(d.InstalledName)
+		}
+	}
+	if len(g.Discs) > 0 && g.Discs[0].InstalledName != "" {
+		return ps1.LauncherELFName(g.Discs[0].InstalledName)
+	}
+	return ""
 }
 
 // Result is the outcome of applying a plan.
@@ -233,6 +256,61 @@ func (m *Manager) install(src string, item PlanItem) (int64, error) {
 		return 0, err
 	}
 	return n, nil
+}
+
+// EnsureAppArtwork gives every installed PS1 title a copy of its artwork under
+// the name OPL's Apps page looks for, and reports how many it wrote.
+//
+// A sweep rather than part of the plan, because a plan contains only the slots
+// that are missing: a title whose cover is already installed produces no plan
+// item at all, and everything installed before OPL's app artwork lookup was
+// understood is in exactly that state. Looking at what is on the partition
+// catches those; looking at what was just downloaded never would.
+//
+// Copies rather than links: PFS over FUSE has no hard links, and one cover is a
+// hundred kilobytes against a disc of several hundred megabytes.
+func (m *Manager) EnsureAppArtwork(games []model.Game, oplMount string) (int, error) {
+	written := 0
+	for _, g := range games {
+		boot := AppBootName(g)
+		if boot == "" {
+			continue
+		}
+		for _, t := range model.ArtTypes {
+			src := Path(oplMount, g.GameID, t)
+			if _, err := os.Stat(src); err != nil {
+				continue
+			}
+			dest := filepath.Join(oplMount, Dir(t), AppFilename(boot, t))
+			if _, err := os.Stat(dest); err == nil && !m.Overwrite {
+				continue
+			}
+			if err := copyOPLFile(src, dest); err != nil {
+				os.Remove(dest)
+				return written, fmt.Errorf("write the Apps-page copy of %s: %w", filepath.Base(src), err)
+			}
+			written++
+		}
+	}
+	return written, nil
+}
+
+// copyOPLFile duplicates a file already written into the +OPL partition.
+func copyOPLFile(src, dest string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := pfs.Create(dest, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(out, in)
+	if cerr := out.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // writeForOPL writes the asset to out as a PNG at the size OPL expects.

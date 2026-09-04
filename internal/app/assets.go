@@ -133,7 +133,21 @@ func (s *Services) SyncAssets(ctx context.Context, games []model.Game, opts Sync
 			}
 		}
 		res, err = mgr.Apply(ctx, plan, opts.OnProgress)
-		return err
+		if err != nil {
+			return err
+		}
+		// A PS1 title reaches the console as an Apps entry, and OPL looks up an
+		// app's artwork by its boot filename rather than by a serial. This puts
+		// the same images under that name, including for titles whose artwork
+		// was installed before that was understood.
+		n, aerr := mgr.EnsureAppArtwork(games, mp)
+		if aerr != nil {
+			return aerr
+		}
+		if n > 0 {
+			logging.ContextLogger(ctx).Info("wrote Apps-page artwork copies", "files", n)
+		}
+		return nil
 	})
 	return plan, res, missingTool(err, external.PFSFuseTool, "Artwork sync")
 }

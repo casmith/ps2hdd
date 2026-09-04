@@ -362,6 +362,22 @@ ps2hdd art sync --all | tee "$WORK/art.txt"
 ps2hdd art status | tee "$WORK/artstatus.txt"
 grep -q "yes" "$WORK/artstatus.txt" || fail "no artwork was installed"
 
+step "a PS1 title gets artwork under the name OPL's Apps page looks for"
+# OPL has no PS1 support, so a PS1 title is an Apps entry and OPL looks up an
+# app's artwork by its whole boot filename rather than by a serial. Art under
+# the serial is where OPL looks for games; an Apps entry never finds it.
+ART="$DEMO/partitions/plus-opl/ART"
+ls "$ART" | grep -q "^SLUS_000.67_COV.png$" \
+  || fail "the PS1 title has no artwork under its serial"
+ls "$ART" | grep -q "SLUS_000.67.Castlevania - Symphony of the Night.ELF_COV.png" \
+  || fail "the PS1 title has no artwork under its launcher name: $(ls "$ART")"
+
+step "removing a PS1 title purges both copies of its artwork"
+ps2hdd remove "Castlevania" --purge-assets
+ls "$ART" | grep -q "SLUS_000.67" \
+  && fail "artwork survived a purging removal: $(ls "$ART" | grep SLUS_000.67)" || true
+ps2hdd install --from-source "Castlevania"
+
 step "artwork is not overwritten"
 COVER="$DEMO/partitions/plus-opl/ART/SLUS_210.50_COV.png"
 before="$(sha256sum "$COVER" | cut -d' ' -f1)"

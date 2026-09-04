@@ -44,6 +44,27 @@ func Filename(gameID string, t model.AssetType) string {
 	return id + "_" + string(t) + ArtExtension
 }
 
+// AppFilename is the name OPL looks for when the entry is on its Apps page
+// rather than in a games list.
+//
+// A PS1 title reaches the console as an application -- a renamed POPSTARTER.ELF
+// -- because OPL has no PS1 support of its own, and it looks up an app's
+// artwork by the whole boot filename rather than by a serial:
+// appGetItemStartup returns the boot value, appGetImage passes it through, and
+// hddGetImage builds "<prefix>ART/<value>_<suffix>" (src/appsupport.c,
+// src/hddsupport.c). So the file it opens is
+//
+//	+OPL/ART/SCUS_941.63.Final Fantasy VII_CD1.ELF_COV.png
+//
+// extension and all, not SCUS_941.63_COV.png. Artwork installed under the
+// serial is where OPL looks for games, and an Apps entry never finds it.
+func AppFilename(bootName string, t model.AssetType) string {
+	if t == model.AssetConfig {
+		return ""
+	}
+	return bootName + "_" + string(t) + ArtExtension
+}
+
 // Dir returns the +OPL subdirectory an asset type lives in.
 func Dir(t model.AssetType) string {
 	if t == model.AssetConfig {
