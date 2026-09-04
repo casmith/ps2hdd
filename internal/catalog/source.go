@@ -268,10 +268,18 @@ type inspectResult struct {
 }
 
 // inspectAll inspects files with bounded concurrency, consulting the cache.
+//
+// Work is handed to a fixed pool of workers through a channel, in the order
+// collect sorted the files into. The obvious alternative -- a goroutine per
+// file, each waiting on a semaphore -- does not preserve that order: the
+// goroutines are launched in order but reach the semaphore in whatever order
+// the scheduler runs them, so a scan of two thousand files proceeds in no
+// particular order at all. That matters twice over. It makes the reported
+// position meaningless, and it means a cancelled scan leaves a random scatter
+// of the library inspected instead of a prefix of it.
 func (s *Scanner) inspectAll(ctx context.Context, root string, files []string, inspect func(string) (model.Game, error)) []inspectResult {
 	log := logging.ContextLogger(ctx)
 	out := make([]inspectResult, len(files))
-	sem := make(chan struct{}, max(1, s.Concurrency))
 	var wg sync.WaitGroup
 	seen := make(map[string]bool, len(files))
 	var seenMu sync.Mutex
@@ -298,53 +306,80 @@ func (s *Scanner) inspectAll(ctx context.Context, root string, files []string, i
 		})
 	}
 
-	for i, path := range files {
-		if ctx.Err() != nil {
-			break
+	inspectOne := func(i int) {
+		path := files[i]
+
+		seenMu.Lock()
+		seen[path] = true
+		seenMu.Unlock()
+
+		fi, err := os.Stat(path)
+		if err != nil {
+			out[i] = inspectResult{path: path, err: err.Error()}
+			report(i, false)
+			return
 		}
-		wg.Add(1)
-		go func(i int, path string) {
+		if s.Cache != nil {
+			if e, ok := s.Cache.Get(path, fi); ok {
+				out[i] = inspectResult{path: path, game: e.Game, err: e.Err, cached: true}
+				report(i, true)
+				return
+			}
+		}
+		g, ierr := inspect(path)
+		if s.Cache != nil {
+			s.Cache.Put(path, fi, g, ierr)
+		}
+		r := inspectResult{path: path, game: g}
+		if ierr != nil {
+			r.err = ierr.Error()
+			log.Debug("source file not identified", "path", path, "err", ierr)
+		}
+		out[i] = r
+		report(i, false)
+	}
+
+	workers := max(1, s.Concurrency)
+	queue := make(chan int)
+	wg.Add(workers)
+	for w := 0; w < workers; w++ {
+		go func() {
 			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			if ctx.Err() != nil {
-				return
-			}
-
-			seenMu.Lock()
-			seen[path] = true
-			seenMu.Unlock()
-
-			fi, err := os.Stat(path)
-			if err != nil {
-				out[i] = inspectResult{path: path, err: err.Error()}
-				report(i, false)
-				return
-			}
-			if s.Cache != nil {
-				if e, ok := s.Cache.Get(path, fi); ok {
-					out[i] = inspectResult{path: path, game: e.Game, err: e.Err, cached: true}
-					report(i, true)
+			for i := range queue {
+				if ctx.Err() != nil {
 					return
 				}
+				inspectOne(i)
 			}
-			g, ierr := inspect(path)
-			if s.Cache != nil {
-				s.Cache.Put(path, fi, g, ierr)
-			}
-			r := inspectResult{path: path, game: g}
-			if ierr != nil {
-				r.err = ierr.Error()
-				log.Debug("source file not identified", "path", path, "err", ierr)
-			}
-			out[i] = r
-			report(i, false)
-		}(i, path)
+		}()
 	}
+	// Feeding stops on cancellation. The select is what keeps this from
+	// blocking forever once the workers have gone home.
+feed:
+	for i := range files {
+		select {
+		case queue <- i:
+		case <-ctx.Done():
+			break feed
+		}
+	}
+	close(queue)
 	wg.Wait()
 
 	if s.Cache != nil {
-		s.Cache.Prune(seen)
+		// Prune only after a complete pass. It exists to drop entries for
+		// files that have gone away, and `seen` is its evidence for what is
+		// still there -- but a cancelled scan has visited only a prefix of the
+		// library, so pruning against that set deletes every entry beyond the
+		// point it reached. That is exactly the work a restart wants back:
+		// interrupting a scan of two thousand archives would otherwise throw
+		// away everything the previous run had learned.
+		//
+		// Saving, by contrast, always happens. Whatever was inspected before
+		// the interrupt is real, and keeping it is the whole point.
+		if ctx.Err() == nil {
+			s.Cache.Prune(seen)
+		}
 		if err := s.Cache.Save(); err != nil {
 			log.Warn("could not save the source scan cache", "err", err)
 		}
