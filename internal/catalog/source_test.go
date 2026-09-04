@@ -444,3 +444,96 @@ func TestScanWithoutProgressHook(t *testing.T) {
 		t.Fatalf("ScanPS2: %v", err)
 	}
 }
+
+// Cancelling a scan must not cost the work already done. A library of two
+// thousand archives takes the best part of an hour to inspect, so an
+// interrupted scan has to pick up roughly where it left off rather than
+// re-inspect everything.
+func TestCancelledScanKeepsTheCache(t *testing.T) {
+	root := t.TempDir()
+	const n = 30
+	for i := 0; i < n; i++ {
+		writePS2ISO(t, filepath.Join(root, fmt.Sprintf("game-%02d.iso", i)), fmt.Sprintf("SLUS_%03d.01", i))
+	}
+
+	c := catalog.NewMemoryCache()
+	s := catalog.NewScanner(c, external.NewFakeRunner())
+	if _, err := s.ScanPS2(context.Background(), root); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	if c.Len() != n {
+		t.Fatalf("after a complete scan the cache holds %d entries, want %d", c.Len(), n)
+	}
+
+	// Interrupt a rescan as soon as it starts, the way Ctrl-C does.
+	ctx, cancel := context.WithCancel(context.Background())
+	s.Concurrency = 1
+	s.OnProgress = func(catalog.ScanProgress) { cancel() }
+	_, _ = s.ScanPS2(ctx, root)
+
+	if c.Len() != n {
+		t.Errorf("a cancelled scan dropped %d of %d cache entries; the next scan has to inspect those files all over again",
+			n-c.Len(), n)
+	}
+}
+
+// The resume a user actually sees goes through the cache file on disk: one
+// process is interrupted and a second one starts fresh. This asserts the whole
+// round trip, not just the in-memory bookkeeping.
+func TestCancelledScanResumesFromDisk(t *testing.T) {
+	t.Setenv("XDG_CACHE_HOME", t.TempDir())
+	root := t.TempDir()
+	const n = 30
+	for i := 0; i < n; i++ {
+		writePS2ISO(t, filepath.Join(root, fmt.Sprintf("game-%02d.iso", i)), fmt.Sprintf("SLUS_%03d.01", i))
+	}
+
+	// A first pass that is interrupted after a handful of files.
+	c1, err := catalog.OpenCache("ps2")
+	if err != nil {
+		t.Fatalf("OpenCache: %v", err)
+	}
+	s1 := catalog.NewScanner(c1, external.NewFakeRunner())
+	s1.Concurrency = 1
+	ctx, cancel := context.WithCancel(context.Background())
+	inspected := 0
+	s1.OnProgress = func(catalog.ScanProgress) {
+		if inspected++; inspected == 5 {
+			cancel()
+		}
+	}
+	_, _ = s1.ScanPS2(ctx, root)
+
+	// A second process picks the cache file up and finishes the job.
+	c2, err := catalog.OpenCache("ps2")
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	if c2.Len() == 0 {
+		t.Fatal("the interrupted scan saved nothing; every restart would begin from scratch")
+	}
+	if c2.Len() < 5 {
+		t.Errorf("the interrupted scan saved %d entries, want at least the 5 it inspected", c2.Len())
+	}
+
+	s2 := catalog.NewScanner(c2, external.NewFakeRunner())
+	var hits int
+	s2.OnProgress = func(p catalog.ScanProgress) {
+		if p.Cached {
+			hits++
+		}
+	}
+	res, err := s2.ScanPS2(context.Background(), root)
+	if err != nil {
+		t.Fatalf("second scan: %v", err)
+	}
+	if len(res.Games) != n {
+		t.Fatalf("second scan found %d games, want %d", len(res.Games), n)
+	}
+	if hits < 5 {
+		t.Errorf("the restart reused %d cached results, want at least the 5 the first pass inspected", hits)
+	}
+	if res.Cached != hits {
+		t.Errorf("ScanResult.Cached = %d but %d files reported a cache hit", res.Cached, hits)
+	}
+}
