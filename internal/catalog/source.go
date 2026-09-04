@@ -344,7 +344,19 @@ func (s *Scanner) inspectAll(ctx context.Context, root string, files []string, i
 	wg.Wait()
 
 	if s.Cache != nil {
-		s.Cache.Prune(seen)
+		// Prune only after a complete pass. It exists to drop entries for
+		// files that have gone away, and `seen` is its evidence for what is
+		// still there -- but a cancelled scan has visited only a prefix of the
+		// library, so pruning against that set deletes every entry beyond the
+		// point it reached. That is exactly the work a restart wants back:
+		// interrupting a scan of two thousand archives would otherwise throw
+		// away everything the previous run had learned.
+		//
+		// Saving, by contrast, always happens. Whatever was inspected before
+		// the interrupt is real, and keeping it is the whole point.
+		if ctx.Err() == nil {
+			s.Cache.Prune(seen)
+		}
 		if err := s.Cache.Save(); err != nil {
 			log.Warn("could not save the source scan cache", "err", err)
 		}
