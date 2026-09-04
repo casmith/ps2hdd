@@ -84,49 +84,112 @@ func Group(discs []Disc, sourceRoot string) []model.Game {
 
 	var out []model.Game
 	for _, k := range order {
-		group := buckets[k]
-		sort.SliceStable(group, func(i, j int) bool {
-			ni, nj := group[i].DiscNumber, group[j].DiscNumber
-			if ni != nj {
-				// Discs with no number sort after numbered ones.
-				if ni == 0 {
-					return false
+		for _, part := range splitUnmarked(buckets[k]) {
+			group := part.discs
+			sort.SliceStable(group, func(i, j int) bool {
+				ni, nj := group[i].DiscNumber, group[j].DiscNumber
+				if ni != nj {
+					// Discs with no number sort after numbered ones.
+					if ni == 0 {
+						return false
+					}
+					if nj == 0 {
+						return true
+					}
+					return ni < nj
 				}
-				if nj == 0 {
-					return true
-				}
-				return ni < nj
-			}
-			return group[i].SourcePath() < group[j].SourcePath()
-		})
-
-		g := model.Game{
-			Platform:      model.PlatformPS1,
-			GameID:        group[0].GameID,
-			SourcePath:    group[0].SourcePath(),
-			ArchiveMember: group[0].ArchiveMember,
-		}
-		g.Title = displayTitle(group, k.dir, sourceRoot)
-		for i, d := range group {
-			n := d.DiscNumber
-			if n == 0 {
-				n = i + 1
-			}
-			g.Discs = append(g.Discs, model.Disc{
-				Number:           n,
-				ArchiveMember:    d.ArchiveMember,
-				GameID:           d.GameID,
-				Title:            d.Title,
-				SourcePath:       d.SourcePath(),
-				SizeBytes:        d.SizeBytes,
-				InstallSizeBytes: d.VCDBytes,
+				return group[i].SourcePath() < group[j].SourcePath()
 			})
-			g.SizeBytes += d.SizeBytes
-			g.InstallSizeBytes += d.VCDBytes
+
+			g := model.Game{
+				Platform:      model.PlatformPS1,
+				GameID:        group[0].GameID,
+				SourcePath:    group[0].SourcePath(),
+				ArchiveMember: group[0].ArchiveMember,
+			}
+			g.Title = part.title
+			if g.Title == "" {
+				g.Title = displayTitle(group, k.dir, sourceRoot)
+			}
+			for i, d := range group {
+				n := d.DiscNumber
+				if n == 0 {
+					n = i + 1
+				}
+				g.Discs = append(g.Discs, model.Disc{
+					Number:           n,
+					ArchiveMember:    d.ArchiveMember,
+					GameID:           d.GameID,
+					Title:            d.Title,
+					SourcePath:       d.SourcePath(),
+					SizeBytes:        d.SizeBytes,
+					InstallSizeBytes: d.VCDBytes,
+				})
+				g.SizeBytes += d.SizeBytes
+				g.InstallSizeBytes += d.VCDBytes
+			}
+			out = append(out, g)
 		}
-		out = append(out, g)
 	}
 	return out
+}
+
+// discPart is one release carved out of a bucket, with a title of its own when
+// it was separated from a numbered set.
+type discPart struct {
+	discs []Disc
+	title string
+}
+
+// splitUnmarked separates discs carrying no disc marker from a release whose
+// other files carry one.
+//
+// A flat library holds several releases that share a title. Redump names them
+// like this:
+//
+//	Final Fantasy VII (USA) (Disc 1).zip
+//	Final Fantasy VII (USA) (Disc 2).zip
+//	Final Fantasy VII (USA) (Disc 3).zip
+//	Final Fantasy VII (USA) (Interactive Sampler CD).zip
+//	Final Fantasy VII (USA) (Square Soft on PlayStation Previews).zip
+//
+// BaseTitle strips every parenthesised tag, so all five reduce to "Final
+// Fantasy VII" and land in one bucket. The last two are separate releases --
+// a demo disc and a previews disc -- and were being installed as discs 4 and 5
+// of the game, which put two foreign images in its DISCS.TXT and cost the
+// drive the better part of a gigabyte.
+//
+// A file that names no disc cannot be a disc of a release whose other files
+// all name one: the numbering is either on every disc of a set or on none of
+// them. When none of them carry a number the group is left alone, so a
+// directory of "Disc 1.cue"/"Disc 2.cue" -- or of names with no markers at all
+// -- still groups as one title.
+func splitUnmarked(group []Disc) []discPart {
+	var marked, unmarked []Disc
+	for _, d := range group {
+		if d.DiscNumber > 0 {
+			marked = append(marked, d)
+		} else {
+			unmarked = append(unmarked, d)
+		}
+	}
+	if len(marked) == 0 || len(unmarked) == 0 {
+		return []discPart{{discs: group}}
+	}
+	parts := []discPart{{discs: marked}}
+	for _, d := range unmarked {
+		// Named from the whole filename rather than through BaseTitle: what
+		// distinguishes it from the release it was just separated from is
+		// precisely the tag BaseTitle removes.
+		parts = append(parts, discPart{discs: []Disc{d}, title: standaloneTitle(d)})
+	}
+	return parts
+}
+
+// standaloneTitle names a disc that was split out of a numbered release.
+func standaloneTitle(d Disc) string {
+	base := filepath.Base(d.SourcePath())
+	return strings.TrimSuffix(base, filepath.Ext(base))
 }
 
 // displayTitle picks the name to show for a group.
