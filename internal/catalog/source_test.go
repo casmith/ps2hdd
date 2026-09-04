@@ -403,6 +403,26 @@ func TestScanReportsProgress(t *testing.T) {
 			t.Fatalf("report %d went backwards: %q after %q", i, filepath.Base(p.Path), filepath.Base(reports[i-1].Path))
 		}
 	}
+
+	// Not going backwards is not enough: a position that leaps to the end and
+	// sticks there satisfies it, and that is exactly what a goroutine-per-file
+	// scan does. Files are handed to the workers in order, so at most
+	// Concurrency of them are in flight and the position can only stall while
+	// the ones behind the furthest finish -- Concurrency-1 reports at worst.
+	stall, worst := 1, 1
+	for i := 1; i < len(reports); i++ {
+		if reports[i].Path != reports[i-1].Path {
+			stall = 1
+			continue
+		}
+		if stall++; stall > worst {
+			worst = stall
+		}
+	}
+	if worst > s.Concurrency {
+		t.Errorf("the reported position stalled for %d consecutive reports with %d workers; "+
+			"it should advance as the scan does, not leap ahead and stick", worst, s.Concurrency)
+	}
 	if got, want := filepath.Base(reports[n-1].Path), fmt.Sprintf("game-%03d.iso", n-1); got != want {
 		t.Errorf("the last report names %q, want the last file %q", got, want)
 	}
