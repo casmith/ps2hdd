@@ -557,3 +557,83 @@ func TestCancelledScanResumesFromDisk(t *testing.T) {
 		t.Errorf("ScanResult.Cached = %d but %d files reported a cache hit", res.Cached, hits)
 	}
 }
+
+// writeCloneCDDisc lays down a CloneCD rip: control file, raw image, and the
+// subchannel dump a ripper leaves beside them.
+func writeCloneCDDisc(t *testing.T, dir, base, serial string) {
+	t.Helper()
+	data, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: serial,
+		Files:    map[string][]byte{"SYSTEM.CNF": isosynth.PS1SystemCNF(serial)},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ccd := fmt.Sprintf("[CloneCD]\nVersion=3\n\n[Entry 0]\nPoint=0xa2\nControl=0x04\nPLBA=%d\n\n"+
+		"[Entry 1]\nPoint=0x01\nControl=0x04\nPLBA=0\n\n[TRACK 1]\nMODE=2\nINDEX 1=0\n", len(data)/2352)
+	for name, body := range map[string][]byte{
+		base + ".ccd": []byte(ccd),
+		base + ".img": data,
+		base + ".sub": make([]byte, 96*len(data)/2352),
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+// A CloneCD rip is one title, not three files. The .ccd speaks for the rip and
+// the .img and .sub beside it must not be listed separately -- an .img on its
+// own would otherwise appear as a second copy of the same game.
+func TestScanPS1ReadsCloneCDRips(t *testing.T) {
+	root := t.TempDir()
+	writeCloneCDDisc(t, filepath.Join(root, "Castlevania"), "SOTN", "SLUS_000.67")
+
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
+	res, err := s.ScanPS1(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ScanPS1: %v", err)
+	}
+	if len(res.Games) != 1 {
+		var got []string
+		for _, g := range res.Games {
+			got = append(got, g.Title+" @ "+g.SourcePath)
+		}
+		t.Fatalf("got %d titles %v, want one", len(res.Games), got)
+	}
+	g := res.Games[0]
+	if g.GameID != "SLUS_000.67" {
+		t.Errorf("game id = %q, want the serial read out of the image", g.GameID)
+	}
+	if filepath.Ext(g.SourcePath) != ".ccd" {
+		t.Errorf("source path = %q, want the .ccd that describes the rip", g.SourcePath)
+	}
+	// The .sub carries no volume descriptor, so listing it would also mean a
+	// spurious problem for a rip that is perfectly readable.
+	if len(res.Problems) != 0 {
+		t.Errorf("problems = %+v, want none", res.Problems)
+	}
+}
+
+// A Nero image cannot be converted. It has to be reported as a shape ps2hdd
+// cannot use, rather than quietly missing from the library.
+func TestScanPS1ReportsNeroAsUnsupported(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "Dragon Quest VII.nrg"), make([]byte, 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
+	res, err := s.ScanPS1(context.Background(), root)
+	if err != nil {
+		t.Fatalf("ScanPS1: %v", err)
+	}
+	if len(res.Games) != 0 {
+		t.Errorf("a Nero image was listed as installable: %+v", res.Games)
+	}
+	if len(res.Problems) != 1 || !strings.Contains(res.Problems[0].Reason, "Nero") {
+		t.Errorf("problems = %+v, want one naming Nero", res.Problems)
+	}
+}

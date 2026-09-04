@@ -46,7 +46,13 @@ var ps2ScanExtensions = func() map[string]bool {
 
 // ps1Extensions are the PS1 entry points. A .cue takes precedence over the
 // .bin it references, and a .bin named by a .cue is never listed separately.
-var ps1Extensions = map[string]bool{".cue": true, ".bin": true, ".img": true, ".iso": true}
+// A .ccd is the entry point for a CloneCD rip, and its .img and .sub are
+// excluded the way a cuesheet's tracks are. A .nrg is listed so that a Nero
+// rip is reported as an unsupported shape rather than silently missing from
+// the library.
+var ps1Extensions = map[string]bool{
+	".cue": true, ".bin": true, ".img": true, ".iso": true, ".ccd": true, ".nrg": true,
+}
 
 // ps1ScanExtensions is what the PS1 walk collects: loose entry points plus the
 // archives that hold one. A PS1 library is very often entirely archived --
@@ -451,9 +457,22 @@ func (s *Scanner) collect(root string, exts map[string]bool, exclude map[string]
 	return files, nil
 }
 
-// cueReferences returns the set of data files named by cuesheets under root.
+// cueReferences returns the set of data files spoken for by a control file:
+// the tracks a cuesheet names, and the image and subchannel dump beside a
+// CloneCD .ccd. Listing those separately would show one rip as several titles.
 func (s *Scanner) cueReferences(root string) (map[string]bool, error) {
 	refs := map[string]bool{}
+	ccds, err := s.collect(root, map[string]bool{".ccd": true}, nil)
+	if err != nil {
+		return nil, err
+	}
+	for _, ccd := range ccds {
+		for _, p := range ps1.CCDCompanions(ccd) {
+			if abs, err := filepath.Abs(p); err == nil {
+				refs[abs] = true
+			}
+		}
+	}
 	cues, err := s.collect(root, map[string]bool{".cue": true}, nil)
 	if err != nil {
 		return nil, err
