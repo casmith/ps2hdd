@@ -277,32 +277,63 @@ func (s *Services) extractPS1Source(ctx context.Context, g model.Game, opts Inst
 		}
 	}
 
-	opts.OnProgress.report(StageExtracting, -1, fmt.Sprintf("unpacking %s", filepath.Base(g.SourcePath)))
-
-	// Everything is taken out, not just the named member: a cuesheet is
-	// useless without the track it names, and a rip's data files are the only
-	// other things in these archives.
-	if err := a.ExtractAll(ctx, g.SourcePath, dir); err != nil {
-		cleanup()
-		return nil, nil, fmt.Errorf("extract %s: %w", filepath.Base(g.SourcePath), err)
+	// A multi-disc release is usually several archives, one per disc --
+	// Chrono_Cross_CD1.part1.rar and Chrono_Cross_CD2.part1.rar -- so each
+	// disc carries the archive it came out of and every distinct one has to be
+	// unpacked. Extracting only the title's own archive found disc 1 and then
+	// failed looking for disc 2 in it.
+	//
+	// Each goes into its own directory. Two archives are free to hold files of
+	// the same name, and a cuesheet resolves the track it names beside itself,
+	// so keeping an archive's contents together is both safer and necessary.
+	discs := append([]model.Disc(nil), g.Discs...)
+	dirs := map[string]string{}
+	for i := range discs {
+		archive := discs[i].SourcePath
+		if discs[i].ArchiveMember == "" || archive == "" {
+			archive = g.SourcePath
+		}
+		if _, done := dirs[archive]; done {
+			continue
+		}
+		sub := filepath.Join(dir, fmt.Sprintf("a%d", len(dirs)))
+		if err := os.MkdirAll(sub, 0o755); err != nil {
+			cleanup()
+			return nil, nil, err
+		}
+		dirs[archive] = sub
+		opts.OnProgress.report(StageExtracting, -1,
+			fmt.Sprintf("unpacking %s", filepath.Base(archive)))
+		// Everything is taken out, not just the named member: a cuesheet is
+		// useless without the track it names, and a rip's data files are the
+		// only other things in these archives.
+		if err := a.ExtractAll(ctx, archive, sub); err != nil {
+			cleanup()
+			return nil, nil, fmt.Errorf("extract %s: %w", filepath.Base(archive), err)
+		}
 	}
 
-	discs := append([]model.Disc(nil), g.Discs...)
 	for i := range discs {
+		archive := discs[i].SourcePath
 		member := discs[i].ArchiveMember
 		if member == "" {
-			member = g.ArchiveMember
+			archive, member = g.SourcePath, g.ArchiveMember
 		}
-		p := filepath.Join(dir, filepath.Base(member))
+		sub, ok := dirs[archive]
+		if !ok {
+			sub = dirs[g.SourcePath]
+		}
+		p := filepath.Join(sub, filepath.Base(member))
 		if _, err := os.Stat(p); err != nil {
 			cleanup()
 			return nil, nil, fmt.Errorf("%s was not written by the extraction of %s",
-				filepath.Base(member), filepath.Base(g.SourcePath))
+				filepath.Base(member), filepath.Base(archive))
 		}
 		discs[i].SourcePath = p
 		discs[i].ArchiveMember = ""
 	}
-	log.Info("extracted archived PS1 source", "archive", g.SourcePath, "into", dir)
+	log.Info("extracted archived PS1 source",
+		"archives", len(dirs), "discs", len(discs), "into", dir)
 	return discs, cleanup, nil
 }
 
