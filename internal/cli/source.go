@@ -33,7 +33,9 @@ func newSourceScanCommand(env *Env) *cobra.Command {
 					env.warnf("%s could not clear the scan cache: %v\n", amber("warning:"), err)
 				}
 			}
-			ps2Res, ps1Res, err := env.Svc.ScanSources(cmd.Context())
+			opts, finish := withScanProgress(env)
+			ps2Res, ps1Res, err := env.Svc.ScanSourcesWith(cmd.Context(), opts)
+			finish()
 			if err != nil {
 				return err
 			}
@@ -69,7 +71,9 @@ func newSourceListCommand(env *Env) *cobra.Command {
 		Short: "List the games found in the source directories",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			ps2Res, ps1Res, err := env.Svc.ScanSources(cmd.Context())
+			opts, finish := withScanProgress(env)
+			ps2Res, ps1Res, err := env.Svc.ScanSourcesWith(cmd.Context(), opts)
+			finish()
 			if err != nil {
 				return err
 			}

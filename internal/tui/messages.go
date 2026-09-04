@@ -41,6 +41,15 @@ type assetSyncProgressMsg struct {
 	item        asset.PlanItem
 }
 
+// scanProgressMsg reports how far the source scan behind a library refresh
+// has got. Scanning is the slow half of loading the catalog, so it is the half
+// worth reporting.
+type scanProgressMsg struct {
+	root        string
+	done, total int
+	path        string
+}
+
 // assetSyncDoneMsg carries a finished artwork sync.
 type assetSyncDoneMsg struct {
 	plan   asset.Plan

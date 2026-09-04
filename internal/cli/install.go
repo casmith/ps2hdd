@@ -155,7 +155,9 @@ command established.`,
 				// The catalog error is not discardable here: a library
 				// that could not be read reports every title as available,
 				// and this is the path that writes to the disk.
-				c, _, err := env.Svc.Catalog(ctx)
+				opts, finish := withScanProgress(env)
+				c, _, err := env.Svc.CatalogWith(ctx, opts)
+				finish()
 				if err != nil {
 					return err
 				}

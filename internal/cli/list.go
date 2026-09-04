@@ -48,7 +48,9 @@ Only the HDD decides that.`,
 				return fmt.Errorf("--installed and --available are mutually exclusive")
 			}
 
-			c, warnings, err := env.Svc.Catalog(cmd.Context())
+			opts, finish := withScanProgress(env)
+			c, warnings, err := env.Svc.CatalogWith(cmd.Context(), opts)
+			finish()
 			if err != nil {
 				return err
 			}
@@ -152,7 +154,9 @@ func newInfoCommand(env *Env) *cobra.Command {
 				return nil
 			}
 
-			c, warnings, err := env.Svc.Catalog(cmd.Context())
+			opts, finish := withScanProgress(env)
+			c, warnings, err := env.Svc.CatalogWith(cmd.Context(), opts)
+			finish()
 			if err != nil {
 				return err
 			}

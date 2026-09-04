@@ -5,6 +5,7 @@ import (
 
 	"github.com/casmith/ps2hdd/internal/app"
 	"github.com/casmith/ps2hdd/internal/asset"
+	"github.com/casmith/ps2hdd/internal/catalog"
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/model"
 )
@@ -15,9 +16,47 @@ import (
 
 func (m *Model) loadCatalog() tea.Cmd {
 	svc, ctx := m.svc, m.ctx
+	m.scan = scanProgressMsg{}
+	// A fresh channel per refresh, closed when the scan is over. Closing is
+	// what ends the listener: without it the waiter below would block on a
+	// channel nothing will ever send to again.
+	ch := make(chan scanProgressMsg, 64)
+	m.scanEvents = ch
+	return tea.Batch(
+		m.waitForScanEvent(),
+		func() tea.Msg {
+			defer close(ch)
+			c, warnings, err := svc.CatalogWith(ctx, app.ScanOptions{
+				OnProgress: func(p catalog.ScanProgress) {
+					// Dropping a report when the update loop is busy is
+					// correct: the next one carries a later position, and a
+					// blocked scanner would be worse than a stale count.
+					select {
+					case ch <- scanProgressMsg{root: p.Root, done: p.Done, total: p.Total, path: p.Path}:
+					default:
+					}
+				},
+			})
+			return catalogLoadedMsg{catalog: c, warnings: warnings, err: err}
+		},
+	)
+}
+
+// waitForScanEvent takes one scan report off the channel. Like the other
+// waiters here it delivers a single message; the update loop re-arms it. When
+// the scan is over the channel is closed and it yields nothing, which is what
+// stops the re-arming.
+func (m *Model) waitForScanEvent() tea.Cmd {
+	ch := m.scanEvents
+	if ch == nil {
+		return nil
+	}
 	return func() tea.Msg {
-		c, warnings, err := svc.Catalog(ctx)
-		return catalogLoadedMsg{catalog: c, warnings: warnings, err: err}
+		msg, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return msg
 	}
 }
 
@@ -72,8 +111,9 @@ func (m *Model) enqueue(games []model.Game) tea.Cmd {
 	)
 }
 
-// waitForQueueEvent blocks on the queue channel and re-arms itself, which is
-// the standard Bubble Tea pattern for turning a channel into messages.
+// waitForQueueEvent takes one item off the queue channel. A tea.Cmd yields a
+// single message, so the handler in Update must re-arm it; otherwise the
+// stream stops after its first event.
 func (m *Model) waitForQueueEvent() tea.Cmd {
 	ch := m.queueEvents
 	if ch == nil {

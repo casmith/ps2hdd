@@ -83,6 +83,26 @@ type ScanProblem struct {
 	Reason string `json:"reason"`
 }
 
+// ScanProgress reports how far a scan has got, so a caller can show something
+// more useful than a spinner. A library of two thousand archives takes minutes
+// to inspect, and without a position in it there is no way to tell a slow scan
+// from a stuck one.
+//
+// Path advances in the alphabetical order the files were collected in and
+// never goes backwards, even though up to Concurrency files are in flight at
+// once: it names how far the scan has got, not what any one worker is doing.
+type ScanProgress struct {
+	// Root is the source directory being scanned.
+	Root string
+	// Done counts files inspected, Total the files to inspect.
+	Done, Total int
+	// Path is the furthest file reached, in collection order.
+	Path string
+	// Cached is true when Path was served from the scan cache rather than
+	// opened, which is why a rescan runs so much faster.
+	Cached bool
+}
+
 // Scanner walks configured source directories.
 type Scanner struct {
 	// Cache stores inspection results between runs.
@@ -94,6 +114,9 @@ type Scanner struct {
 	// Archive opens compressed sources. When its tool is not installed,
 	// archives are reported as skipped rather than silently passed over.
 	Archive external.Archive
+	// OnProgress, when set, is called as each file is inspected. Calls are
+	// serialised, so it does not need to be safe for concurrent use.
+	OnProgress func(ScanProgress)
 }
 
 // NewScanner returns a scanner with sensible defaults.
@@ -117,7 +140,7 @@ func (s *Scanner) ScanPS2(ctx context.Context, root string) (ScanResult, error) 
 	}
 
 	_, haveArchiveTool := s.Archive.Available()
-	outcomes := s.inspectAll(ctx, files, func(path string) (model.Game, error) {
+	outcomes := s.inspectAll(ctx, root, files, func(path string) (model.Game, error) {
 		if external.IsArchive(path) {
 			if !haveArchiveTool {
 				return model.Game{}, fmt.Errorf("%s is an archive; install %s to read inside it",
@@ -166,7 +189,7 @@ func (s *Scanner) ScanPS1(ctx context.Context, root string) (ScanResult, error) 
 	}
 
 	_, haveArchiveTool := s.Archive.Available()
-	outcomes := s.inspectAll(ctx, files, func(path string) (model.Game, error) {
+	outcomes := s.inspectAll(ctx, root, files, func(path string) (model.Game, error) {
 		if external.IsArchive(path) {
 			if !haveArchiveTool {
 				return model.Game{}, fmt.Errorf("%s is an archive; install %s to read inside it",
@@ -245,13 +268,35 @@ type inspectResult struct {
 }
 
 // inspectAll inspects files with bounded concurrency, consulting the cache.
-func (s *Scanner) inspectAll(ctx context.Context, files []string, inspect func(string) (model.Game, error)) []inspectResult {
+func (s *Scanner) inspectAll(ctx context.Context, root string, files []string, inspect func(string) (model.Game, error)) []inspectResult {
 	log := logging.ContextLogger(ctx)
 	out := make([]inspectResult, len(files))
 	sem := make(chan struct{}, max(1, s.Concurrency))
 	var wg sync.WaitGroup
 	seen := make(map[string]bool, len(files))
 	var seenMu sync.Mutex
+
+	// Progress is reported from the worker goroutines, so the counter, the
+	// furthest index reached and the callback itself are all covered by one
+	// mutex: the callback then sees a consistent snapshot and does not have to
+	// be thread-safe.
+	var progMu sync.Mutex
+	done, furthest := 0, -1
+	report := func(i int, cached bool) {
+		if s.OnProgress == nil {
+			return
+		}
+		progMu.Lock()
+		defer progMu.Unlock()
+		done++
+		if i > furthest {
+			furthest = i
+		}
+		s.OnProgress(ScanProgress{
+			Root: root, Done: done, Total: len(files),
+			Path: files[furthest], Cached: cached,
+		})
+	}
 
 	for i, path := range files {
 		if ctx.Err() != nil {
@@ -273,11 +318,13 @@ func (s *Scanner) inspectAll(ctx context.Context, files []string, inspect func(s
 			fi, err := os.Stat(path)
 			if err != nil {
 				out[i] = inspectResult{path: path, err: err.Error()}
+				report(i, false)
 				return
 			}
 			if s.Cache != nil {
 				if e, ok := s.Cache.Get(path, fi); ok {
 					out[i] = inspectResult{path: path, game: e.Game, err: e.Err, cached: true}
+					report(i, true)
 					return
 				}
 			}
@@ -291,6 +338,7 @@ func (s *Scanner) inspectAll(ctx context.Context, files []string, inspect func(s
 				log.Debug("source file not identified", "path", path, "err", ierr)
 			}
 			out[i] = r
+			report(i, false)
 		}(i, path)
 	}
 	wg.Wait()

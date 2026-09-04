@@ -241,10 +241,25 @@ func (s *Services) sourceCache(name string) *catalog.Cache {
 	return c
 }
 
+// ScanOptions tune a source scan.
+type ScanOptions struct {
+	// OnProgress, when set, is called as each source file is inspected.
+	// Calls are serialised and arrive on a worker goroutine.
+	OnProgress func(catalog.ScanProgress)
+}
+
 // ScanSources scans both configured source directories.
 func (s *Services) ScanSources(ctx context.Context) (ps2Res, ps1Res catalog.ScanResult, err error) {
+	return s.ScanSourcesWith(ctx, ScanOptions{})
+}
+
+// ScanSourcesWith is ScanSources with progress reporting. The two platforms
+// are scanned in sequence and report separately, each counting from one, so a
+// caller showing a position must label it with the root it came from.
+func (s *Services) ScanSourcesWith(ctx context.Context, opts ScanOptions) (ps2Res, ps1Res catalog.ScanResult, err error) {
 	if dir := s.Config.Sources.PS2; dir != "" {
 		sc := catalog.NewScanner(s.sourceCache("ps2"), s.Runner)
+		sc.OnProgress = opts.OnProgress
 		ps2Res, err = sc.ScanPS2(ctx, dir)
 		if err != nil {
 			return ps2Res, ps1Res, fmt.Errorf("scan PS2 sources: %w", err)
@@ -252,6 +267,7 @@ func (s *Services) ScanSources(ctx context.Context) (ps2Res, ps1Res catalog.Scan
 	}
 	if dir := s.Config.Sources.PS1; dir != "" {
 		sc := catalog.NewScanner(s.sourceCache("ps1"), s.Runner)
+		sc.OnProgress = opts.OnProgress
 		ps1Res, err = sc.ScanPS1(ctx, dir)
 		if err != nil {
 			return ps2Res, ps1Res, fmt.Errorf("scan PS1 sources: %w", err)
@@ -282,6 +298,13 @@ func (s *Services) ClearSourceCache() error {
 // recoverable case: it arrives as a *catalog.PartialError and becomes a
 // warning, because the PS2 half it carries is still complete and true.
 func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error, error) {
+	return s.CatalogWith(ctx, ScanOptions{})
+}
+
+// CatalogWith is Catalog with scan progress reporting. Scanning the source
+// directories is by far the slowest part of building the catalog, so it is the
+// only part that reports.
+func (s *Services) CatalogWith(ctx context.Context, opts ScanOptions) (catalog.Catalog, []error, error) {
 	var warnings []error
 
 	installed, err := s.Installed(ctx)
@@ -300,7 +323,7 @@ func (s *Services) Catalog(ctx context.Context) (catalog.Catalog, []error, error
 		return catalog.Catalog{}, nil, err
 	}
 
-	ps2Res, ps1Res, err := s.ScanSources(ctx)
+	ps2Res, ps1Res, err := s.ScanSourcesWith(ctx, opts)
 	if err != nil {
 		warnings = append(warnings, err)
 	}

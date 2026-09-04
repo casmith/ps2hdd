@@ -128,6 +128,26 @@ func truncate(s string, n int) string {
 	return string(r[:n-1]) + "…"
 }
 
+// truncateMiddle shortens a filename from the middle, keeping the title at the
+// front and the disc number and extension at the end. "(Disc 3).zip" is
+// exactly the part that says which of several files is being read, so dropping
+// the tail -- what truncate does -- is the wrong half to lose here.
+func truncateMiddle(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	if n <= 1 {
+		if n < 0 {
+			return ""
+		}
+		return string(r[:n])
+	}
+	keep := n - 1 // one rune goes to the ellipsis
+	front := (keep + 1) / 2
+	return string(r[:front]) + "…" + string(r[len(r)-(keep-front):])
+}
+
 // section prints a heading.
 func section(w io.Writer, title string) {
 	fmt.Fprintf(w, "\n%s\n", bold(title))

@@ -49,7 +49,9 @@ func planList(env *Env, ctx context.Context, path string, opts app.PlanOptions) 
 	if err != nil {
 		return plan, err
 	}
-	c, warnings, err := env.Svc.Catalog(ctx)
+	scanOpts, finish := withScanProgress(env)
+	c, warnings, err := env.Svc.CatalogWith(ctx, scanOpts)
+	finish()
 	if err != nil {
 		return plan, err
 	}

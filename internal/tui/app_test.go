@@ -5,7 +5,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 
@@ -46,15 +48,59 @@ func newTestModel(t *testing.T) *Model {
 	return m
 }
 
-// loadAll runs the model's data-loading commands synchronously and feeds the
-// results back, which is what Init does asynchronously in a real session.
+// loadAll runs the model's data-loading commands and feeds the results back,
+// which is what Init does asynchronously in a real session.
 func loadAll(t *testing.T, m *Model) {
 	t.Helper()
 	for _, cmd := range []tea.Cmd{m.loadCatalog(), m.loadDrive(), m.loadAssets()} {
-		if cmd == nil {
-			continue
+		drain(t, m, cmd)
+	}
+}
+
+// drain runs cmd and applies every message it produces to the model.
+//
+// A command may be a batch -- loadCatalog pairs the scan with a listener for
+// its progress -- and the Bubble Tea runtime runs a batch's members
+// concurrently, so this does too. Messages are applied on the test's own
+// goroutine, in arrival order, which is the ordering the real update loop
+// gives them.
+func drain(t *testing.T, m *Model, cmd tea.Cmd) {
+	t.Helper()
+	if cmd == nil {
+		return
+	}
+	msgs := make(chan tea.Msg, 64)
+	var wg sync.WaitGroup
+	var run func(tea.Cmd)
+	run = func(c tea.Cmd) {
+		defer wg.Done()
+		msg := c()
+		if batch, ok := msg.(tea.BatchMsg); ok {
+			for _, sub := range batch {
+				wg.Add(1)
+				go run(sub)
+			}
+			return
 		}
-		m.Update(cmd())
+		if msg != nil {
+			msgs <- msg
+		}
+	}
+	wg.Add(1)
+	go run(cmd)
+	go func() { wg.Wait(); close(msgs) }()
+
+	done := time.After(30 * time.Second)
+	for {
+		select {
+		case msg, ok := <-msgs:
+			if !ok {
+				return
+			}
+			m.Update(msg)
+		case <-done:
+			t.Fatal("timed out draining a command")
+		}
 	}
 }
 
@@ -317,5 +363,77 @@ func TestHelpDialogOpens(t *testing.T) {
 	}
 	if !strings.Contains(m.dialog.Body, "install") {
 		t.Error("the help does not mention installing")
+	}
+}
+
+// The status line during a refresh is the only thing a user has to judge a
+// slow scan by. It has to say where in which library the scan has got to, not
+// just that it is running.
+func TestStatusLineShowsScanPosition(t *testing.T) {
+	m := newTestModel(t)
+	m.loadingCat = true
+
+	if got := m.renderStatus(); !strings.Contains(got, "reading the library") {
+		t.Errorf("before the first report the status should say it started, got %q", got)
+	}
+
+	src := m.svc.Config.Sources
+	m.Update(scanProgressMsg{
+		root: src.PS1, done: 1234, total: 1994,
+		path: filepath.Join(src.PS1, "Final Fantasy VII (USA) (Disc 1).zip"),
+	})
+	got := m.renderStatus()
+	for _, want := range []string{"1234/1994", "PS1", "Final Fantasy"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("status line is missing %q:\n%s", want, got)
+		}
+	}
+
+	// A finished refresh clears the position; leaving it would make the last
+	// file scanned look like it is still being scanned.
+	m.Update(catalogLoadedMsg{})
+	if got := m.renderStatus(); strings.Contains(got, "1234/1994") {
+		t.Errorf("the scan position survived the load finishing: %q", got)
+	}
+}
+
+// A tea.Cmd yields one message, so every listener has to be re-armed by its
+// handler. Without that a stream reports its first event and goes silent,
+// which is what the scan counter, the artwork counter and the install queue
+// all depend on not happening.
+func TestStreamHandlersReArmTheirListeners(t *testing.T) {
+	m := newTestModel(t)
+	m.scanEvents = make(chan scanProgressMsg, 4)
+	m.assetEvents = make(chan assetSyncProgressMsg, 4)
+	m.queueEvents = make(chan app.QueueItem, 4)
+
+	cases := map[string]tea.Msg{
+		"scan":  scanProgressMsg{done: 1, total: 2},
+		"asset": assetSyncProgressMsg{done: 1, total: 2},
+		"queue": queueUpdateMsg{},
+	}
+	for name, msg := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, cmd := m.Update(msg)
+			if cmd == nil {
+				t.Fatal("the handler returned no command, so the listener is never re-armed and the stream stops here")
+			}
+		})
+	}
+}
+
+// A closed channel ends the stream rather than re-arming forever.
+func TestScanListenerStopsWhenTheScanEnds(t *testing.T) {
+	m := newTestModel(t)
+	ch := make(chan scanProgressMsg)
+	m.scanEvents = ch
+	close(ch)
+
+	cmd := m.waitForScanEvent()
+	if cmd == nil {
+		t.Fatal("no listener command")
+	}
+	if msg := cmd(); msg != nil {
+		t.Errorf("a closed scan channel yielded %#v, want nothing", msg)
 	}
 }

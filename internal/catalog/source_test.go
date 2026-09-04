@@ -2,6 +2,7 @@ package catalog_test
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -356,5 +357,90 @@ func TestPersistentCacheSurvivesReopen(t *testing.T) {
 	}
 	if c3.Len() != 0 {
 		t.Errorf("Clear left %d entries", c3.Len())
+	}
+}
+
+// A scan of a large library is the slowest thing ps2hdd does, and the only
+// thing a caller can show while it runs is what the scanner reports. These
+// assert the three properties any progress display depends on: the count
+// reaches the total, it advances one file at a time, and the reported position
+// never goes backwards even though files are inspected concurrently.
+func TestScanReportsProgress(t *testing.T) {
+	root := t.TempDir()
+	const n = 300
+	for i := 0; i < n; i++ {
+		// Names sort in the same order as the index, so a report that goes
+		// backwards alphabetically is a report that went backwards.
+		name := fmt.Sprintf("game-%03d.iso", i)
+		writePS2ISO(t, filepath.Join(root, name), fmt.Sprintf("SLUS_%03d.%02d", i, i%100))
+	}
+
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
+	// Several files in flight at once is the case the ordering guarantee
+	// exists for; with one worker every implementation looks correct.
+	s.Concurrency = 8
+	var reports []catalog.ScanProgress
+	s.OnProgress = func(p catalog.ScanProgress) { reports = append(reports, p) }
+
+	if _, err := s.ScanPS2(context.Background(), root); err != nil {
+		t.Fatalf("ScanPS2: %v", err)
+	}
+
+	if len(reports) != n {
+		t.Fatalf("got %d progress reports, want one per file (%d)", len(reports), n)
+	}
+	for i, p := range reports {
+		if p.Done != i+1 {
+			t.Fatalf("report %d: Done = %d, want %d; the counter must not skip or repeat", i, p.Done, i+1)
+		}
+		if p.Total != n {
+			t.Errorf("report %d: Total = %d, want %d", i, p.Total, n)
+		}
+		if p.Root != root {
+			t.Errorf("report %d: Root = %q, want %q", i, p.Root, root)
+		}
+		if i > 0 && p.Path < reports[i-1].Path {
+			t.Fatalf("report %d went backwards: %q after %q", i, filepath.Base(p.Path), filepath.Base(reports[i-1].Path))
+		}
+	}
+	if got, want := filepath.Base(reports[n-1].Path), fmt.Sprintf("game-%03d.iso", n-1); got != want {
+		t.Errorf("the last report names %q, want the last file %q", got, want)
+	}
+	if reports[0].Cached {
+		t.Error("the first scan of a file reported it as cached")
+	}
+}
+
+// A rescan is fast because it reads the cache rather than the images. Progress
+// has to say so, or the speed looks like files being skipped.
+func TestScanProgressReportsCacheHits(t *testing.T) {
+	root := t.TempDir()
+	writePS2ISO(t, filepath.Join(root, "Game.iso"), "SLUS_200.02")
+	c := catalog.NewMemoryCache()
+	s := catalog.NewScanner(c, external.NewFakeRunner())
+
+	if _, err := s.ScanPS2(context.Background(), root); err != nil {
+		t.Fatalf("first scan: %v", err)
+	}
+	var reports []catalog.ScanProgress
+	s.OnProgress = func(p catalog.ScanProgress) { reports = append(reports, p) }
+	if _, err := s.ScanPS2(context.Background(), root); err != nil {
+		t.Fatalf("rescan: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("got %d reports, want 1", len(reports))
+	}
+	if !reports[0].Cached {
+		t.Error("a rescan of an unchanged file did not report a cache hit")
+	}
+}
+
+// A scanner with no progress hook is the normal case and must not panic.
+func TestScanWithoutProgressHook(t *testing.T) {
+	root := t.TempDir()
+	writePS2ISO(t, filepath.Join(root, "Game.iso"), "SLUS_200.02")
+	s := catalog.NewScanner(catalog.NewMemoryCache(), external.NewFakeRunner())
+	if _, err := s.ScanPS2(context.Background(), root); err != nil {
+		t.Fatalf("ScanPS2: %v", err)
 	}
 }
