@@ -694,7 +694,19 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 	}
 	if opts.SyncAssets {
 		opts.OnProgress.report(StageSyncAssets, -1, g.Title)
-		n, err := s.syncAssetsFor(ctx, []model.Game{g})
+		// The artwork a PS1 title needs on OPL's Apps page is named after its
+		// launcher, which is named after the VCD -- so the names it was just
+		// installed under have to be on the game before the sync sees it.
+		// Without them the sync writes only the serial-named copies and the
+		// Apps entry stays blank until something syncs again.
+		synced := g
+		synced.Discs = append([]model.Disc(nil), g.Discs...)
+		for i := range synced.Discs {
+			if i < len(names) {
+				synced.Discs[i].InstalledName = names[i]
+			}
+		}
+		n, err := s.syncAssetsFor(ctx, []model.Game{synced})
 		if err != nil {
 			log.Warn("artwork sync after install failed", "title", g.Title, "err", err)
 		}
@@ -953,7 +965,13 @@ func (s *Services) syncAssetsFor(ctx context.Context, games []model.Game) (int, 
 			return err
 		}
 		installed = len(res.Installed)
-		return nil
+		// A PS1 title is an Apps entry, and OPL looks up an app's artwork by
+		// its boot filename rather than by a serial. This is the second place
+		// artwork is installed -- SyncAssets is the other -- and leaving it out
+		// here meant a fresh install had no Apps-page art until something
+		// synced again.
+		_, err = mgr.EnsureAppArtwork(games, mp)
+		return err
 	})
 	return installed, err
 }

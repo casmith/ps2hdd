@@ -300,6 +300,17 @@ func (s *Services) assetPaths(ctx context.Context, g model.Game) ([]string, erro
 				out = append(out, asset.Dir(t)+"/"+asset.Filename(g.GameID, t))
 			}
 		}
+		// A PS1 title's artwork exists twice: once under its serial, and once
+		// under the launcher filename OPL's Apps page looks it up by. Purging
+		// only the first leaves the second behind for a game that is gone.
+		if boot := asset.AppBootName(g); boot != "" {
+			for _, t := range model.ArtTypes {
+				name := asset.AppFilename(boot, t)
+				if _, err := os.Stat(filepath.Join(mp, asset.Dir(t), name)); err == nil {
+					out = append(out, asset.Dir(t)+"/"+name)
+				}
+			}
+		}
 		return nil
 	})
 	return out, err
@@ -317,6 +328,17 @@ func (s *Services) purgeAssets(ctx context.Context, g model.Game) error {
 			p := asset.Path(mp, g.GameID, t)
 			if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
 				return err
+			}
+		}
+		// The second copy, under the launcher name OPL's Apps page looks it up
+		// by. Deleting only the first leaves artwork behind for a game that is
+		// gone, and nothing would ever collect it.
+		if boot := asset.AppBootName(g); boot != "" {
+			for _, t := range model.ArtTypes {
+				p := filepath.Join(mp, asset.Dir(t), asset.AppFilename(boot, t))
+				if err := os.Remove(p); err != nil && !os.IsNotExist(err) {
+					return err
+				}
 			}
 		}
 		return nil
