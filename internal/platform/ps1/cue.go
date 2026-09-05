@@ -131,13 +131,64 @@ func ParseCueFile(path string) (Cue, error) {
 	}
 	c.Path = path
 	dir := filepath.Dir(path)
+	resolve := fileResolver(dir)
 	for _, n := range c.Files {
-		c.FilePaths = append(c.FilePaths, filepath.Join(dir, n))
+		c.FilePaths = append(c.FilePaths, resolve(n))
 	}
 	if c.BinName != "" {
-		c.BinPath = filepath.Join(dir, c.BinName)
+		c.BinPath = resolve(c.BinName)
 	}
 	return c, nil
+}
+
+// fileResolver returns a function that turns a FILE name from a cuesheet into
+// a path in dir, matching case-insensitively when it has to.
+//
+// Cuesheets are routinely written on Windows, where the case of a filename is
+// not information. A sheet from 2003 says
+//
+//	FILE "FINAL FANTASY VII DISC 1.BIN" BINARY
+//
+// beside a file actually called "Final Fantasy VII Disc 1.bin". That rip is
+// perfectly good and works everywhere except a case-sensitive filesystem,
+// where it failed with "references FINAL FANTASY VII DISC 1.BIN, which is
+// missing" -- a file the user can plainly see is there.
+//
+// The exact name always wins, and the directory is only read when it does not
+// resolve, so nothing is slower and no ambiguity is introduced where the
+// filesystem itself has none. A name that matches nothing is returned
+// unchanged, so the error still quotes what the sheet actually said.
+func fileResolver(dir string) func(string) string {
+	var lower map[string]string // lower-cased name -> real name, read once
+	return func(name string) string {
+		exact := filepath.Join(dir, name)
+		if _, err := os.Stat(exact); err == nil {
+			return exact
+		}
+		if lower == nil {
+			lower = map[string]string{}
+			entries, err := os.ReadDir(dir)
+			if err != nil {
+				return exact
+			}
+			for _, e := range entries {
+				if !e.IsDir() {
+					// First match wins. Two files differing only in case is
+					// possible here and there is no way to tell which the
+					// sheet meant, so the one the directory lists first is
+					// used rather than guessing.
+					k := strings.ToLower(e.Name())
+					if _, seen := lower[k]; !seen {
+						lower[k] = e.Name()
+					}
+				}
+			}
+		}
+		if real, ok := lower[strings.ToLower(name)]; ok {
+			return filepath.Join(dir, real)
+		}
+		return exact
+	}
 }
 
 // ParseCue parses cuesheet text.
