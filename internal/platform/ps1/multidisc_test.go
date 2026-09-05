@@ -1,8 +1,11 @@
 package ps1_test
 
 import (
+	"fmt"
+	"strings"
 	"testing"
 
+	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
 )
 
@@ -168,5 +171,134 @@ func TestGroupExplicitEmpty(t *testing.T) {
 	g := ps1.GroupExplicit(nil, "")
 	if g.DiscCount() != 1 || len(g.Discs) != 0 {
 		t.Errorf("empty group = %+v", g)
+	}
+}
+
+// A flat library holds several releases sharing a title. BaseTitle strips
+// every parenthesised tag, so they all reduce to the same name -- but a file
+// that names no disc is not a disc of a set whose files all name one.
+//
+// This exact library put the Interactive Sampler CD and a previews disc into
+// Final Fantasy VII as discs 4 and 5, and wrote both to the HDD.
+func TestGroupKeepsSeparateReleasesApart(t *testing.T) {
+	root := "/src/psx"
+	names := []string{
+		"Final Fantasy VII (USA) (Disc 1).zip",
+		"Final Fantasy VII (USA) (Disc 2).zip",
+		"Final Fantasy VII (USA) (Disc 3).zip",
+		"Final Fantasy VII (USA) (Interactive Sampler CD).zip",
+		"Final Fantasy VII (USA) (Square Soft on PlayStation Previews).zip",
+	}
+	serials := []string{"SCUS_941.63", "SCUS_941.64", "SCUS_941.65", "SCUS_949.61", "SCUS_941.79"}
+	var discs []ps1.Disc
+	for i, n := range names {
+		discs = append(discs, ps1.Disc{
+			ArchivePath:   root + "/" + n,
+			ArchiveMember: strings.TrimSuffix(n, ".zip") + ".cue",
+			GameID:        serials[i],
+			Title:         ps1.BaseTitle(n),
+			DiscNumber:    ps1.DiscNumber(n),
+			SizeBytes:     1 << 20,
+		})
+	}
+
+	games := ps1.Group(discs, root)
+	if len(games) != 3 {
+		var got []string
+		for _, g := range games {
+			got = append(got, fmt.Sprintf("%s(%d discs)", g.Title, len(g.Discs)))
+		}
+		t.Fatalf("got %d titles %v, want 3: the game and the two other releases", len(games), got)
+	}
+
+	var game *model.Game
+	for i := range games {
+		if len(games[i].Discs) > 1 {
+			game = &games[i]
+		}
+	}
+	if game == nil {
+		t.Fatal("no multi-disc title came out of a three-disc release")
+	}
+	if len(game.Discs) != 3 {
+		t.Errorf("the game has %d discs, want 3", len(game.Discs))
+	}
+	if game.GameID != "SCUS_941.63" {
+		t.Errorf("game id = %q, want the first disc's serial", game.GameID)
+	}
+	for i, d := range game.Discs {
+		if d.Number != i+1 {
+			t.Errorf("disc %d is numbered %d", i+1, d.Number)
+		}
+		if d.GameID == "SCUS_949.61" || d.GameID == "SCUS_941.79" {
+			t.Errorf("disc %d is %s, which belongs to a different release", d.Number, d.GameID)
+		}
+	}
+
+	// The two singles keep the tag that tells them apart; without it they are
+	// three entries with the same name and no way to choose between them.
+	titles := map[string]bool{}
+	for _, g := range games {
+		if len(g.Discs) == 1 {
+			titles[g.Title] = true
+		}
+	}
+	for _, want := range []string{
+		"Final Fantasy VII (USA) (Interactive Sampler CD)",
+		"Final Fantasy VII (USA) (Square Soft on PlayStation Previews)",
+	} {
+		if !titles[want] {
+			t.Errorf("no standalone title %q; got %v", want, titles)
+		}
+	}
+}
+
+// A release whose discs carry no markers at all is still one release. The rule
+// only separates a file that names no disc from files that do.
+//
+// One archive per disc, each holding a generically named member, is the shape
+// this has to survive: the disc number is parsed from the member, so both
+// discs come through unnumbered, and splitting them would install disc 2 as a
+// title of its own.
+func TestGroupKeepsUnnumberedReleaseTogether(t *testing.T) {
+	root := "/src/psx"
+	var discs []ps1.Disc
+	for _, n := range []string{"MGS_CD1.7z", "MGS_CD2.7z"} {
+		discs = append(discs, ps1.Disc{
+			ArchivePath:   root + "/" + n,
+			ArchiveMember: "disc.cue",
+			GameID:        "SLUS_005.94",
+			Title:         "disc",
+			SizeBytes:     1 << 20,
+		})
+	}
+	games := ps1.Group(discs, root)
+	if len(games) != 1 {
+		t.Fatalf("got %d titles, want one two-disc release", len(games))
+	}
+	if len(games[0].Discs) != 2 {
+		t.Fatalf("the release has %d discs, want 2", len(games[0].Discs))
+	}
+	for i, d := range games[0].Discs {
+		if d.Number != i+1 {
+			t.Errorf("disc at index %d is numbered %d, want %d", i, d.Number, i+1)
+		}
+	}
+}
+
+// The common per-directory layout is unaffected: every file names its disc.
+func TestGroupKeepsNumberedDirectoryTogether(t *testing.T) {
+	dir := "/src/psx/Final Fantasy VII"
+	var discs []ps1.Disc
+	for i, n := range []string{"Disc 1.cue", "Disc 2.cue", "Disc 3.cue"} {
+		discs = append(discs, ps1.Disc{
+			CuePath: dir + "/" + n, GameID: "SCUS_941.6" + string(rune('3'+i)),
+			DiscNumber: ps1.DiscNumber(n), SizeBytes: 1 << 20,
+		})
+	}
+	games := ps1.Group(discs, "/src/psx")
+	if len(games) != 1 || len(games[0].Discs) != 3 {
+		t.Fatalf("got %d titles, first with %d discs; want one title of three discs",
+			len(games), len(games[0].Discs))
 	}
 }
