@@ -1,7 +1,10 @@
 package ps1
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -84,27 +87,58 @@ type RuntimeFile struct {
 	Copyrighted bool
 	// Required marks a file without which PS1 playback cannot work.
 	Required bool
+	// SHA256 is the file's known content, lower-case hex, or "" when there is
+	// no single right answer. POPS.ELF and the files beside it are one fixed
+	// release that does not vary between POPStarter revisions, so they can be
+	// checked exactly; POPSTARTER.ELF itself changes with every revision and
+	// cannot be.
+	SHA256 string
 }
 
 // RuntimeFiles is what a working POPStarter installation needs.
+//
+// The hashes are the published ones for the POPS release POPStarter is built
+// against. They matter more than they look: a POPS.ELF that is the wrong file
+// fails every PS1 title identically, whatever is done to the VCD, the launcher
+// or its name, and there is nothing in the symptom to say so. Checking only
+// that the files exist reports READY for a drive that cannot run anything.
 var RuntimeFiles = []RuntimeFile{
 	{
 		Name:        "POPS.ELF",
 		Description: "the POPS PlayStation emulator",
 		Copyrighted: true,
 		Required:    true,
+		SHA256:      "59df3389c4df88a572daa720b05507c52c34eddfa0031a6fbeec55e0c2d0fcb1",
 	},
 	{
 		Name:        "IOPRP252.IMG",
 		Description: "the IOP replacement image POPS loads",
 		Copyrighted: true,
 		Required:    true,
+		SHA256:      "3338b238d84d7d586b716677e3a1c03b2088b882ecfa17f91fc33798931ca3ba",
 	},
 	{
 		Name:        POPStarterELF,
 		Description: "the POPStarter launcher",
 		Copyrighted: false,
 		Required:    true,
+	},
+	// The two packages ship with POPS and belong beside it. They are not
+	// marked required, because a setup missing them is not necessarily broken
+	// and calling a working drive NOT READY would be worse than saying
+	// nothing -- but they are imported and reported, which is what makes an
+	// incomplete runtime visible.
+	{
+		Name:        "POPS.PAK",
+		Description: "the POPS support package",
+		Copyrighted: true,
+		SHA256:      "a3973bc4d177f65dd3201afe508aa9b59dd8a4d3374369bff14fb01f920aacad",
+	},
+	{
+		Name:        "POPS_IOX.PAK",
+		Description: "the POPS I/O support package",
+		Copyrighted: true,
+		SHA256:      "9fa120429a73b632029b4f0fd554cd45c1e770f8ec020ecc3120b38a2b983e6e",
 	},
 }
 
@@ -120,11 +154,16 @@ type Readiness struct {
 	RuntimeChecked bool `json:"runtime_checked"`
 	// Missing lists the required runtime files that were not found.
 	Missing []string `json:"missing,omitempty"`
+	// Wrong lists runtime files that are present but are not the file they
+	// should be. A wrong POPS.ELF is indistinguishable from a right one until
+	// a game is launched, and then every game fails the same way.
+	Wrong []string `json:"wrong,omitempty"`
 }
 
 // Ready reports whether a PS1 game could be launched right now.
 func (r Readiness) Ready() bool {
-	return r.POPSPartition && r.CommonPartition && r.RuntimeChecked && len(r.Missing) == 0
+	return r.POPSPartition && r.CommonPartition && r.RuntimeChecked &&
+		len(r.Missing) == 0 && len(r.Wrong) == 0
 }
 
 // Status renders READY or NOT READY.
@@ -149,6 +188,23 @@ func (r Readiness) Explain() []string {
 			out = append(out, fmt.Sprintf("%s could not be inspected, so the runtime status is unknown. Check that pfsfuse is installed.", CommonPartition))
 		}
 		return out
+	}
+	for _, name := range r.Wrong {
+		f, _ := findRuntimeFile(name)
+		out = append(out, fmt.Sprintf(
+			"%s (%s) is present but is not the right file. Every PS1 title fails identically "+
+				"with the wrong one, and nothing else in the setup will show why. Replace it and "+
+				"re-import with `ps2hdd setup ps1 --import <dir>`; the expected SHA-256 is %s.",
+			name, f.Description, f.SHA256))
+	}
+	for _, f := range RuntimeFiles {
+		if f.Required || f.SHA256 == "" || r.Runtime[f.Name] {
+			continue
+		}
+		out = append(out, fmt.Sprintf(
+			"%s (%s) is not installed. It ships with POPS and belongs beside it; "+
+				"PS1 support may work without it, but the runtime is incomplete.",
+			f.Name, f.Description))
 	}
 	for _, name := range r.Missing {
 		f, ok := findRuntimeFile(name)
@@ -181,40 +237,69 @@ func findRuntimeFile(name string) (RuntimeFile, bool) {
 
 // CheckRuntime inspects a mounted __common partition and fills in the runtime
 // half of a Readiness.
-func CheckRuntime(commonMount string) (map[string]bool, []string, error) {
+func CheckRuntime(commonMount string) (present map[string]bool, missing, wrong []string, err error) {
 	dir := filepath.Join(commonMount, POPSDir)
-	present := map[string]bool{}
+	present = map[string]bool{}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			// No POPS directory at all: everything required is missing, which
 			// is a definite answer rather than an error.
-			var missing []string
 			for _, f := range RuntimeFiles {
 				present[f.Name] = false
 				if f.Required {
 					missing = append(missing, f.Name)
 				}
 			}
-			return present, missing, nil
+			return present, missing, nil, nil
 		}
-		return nil, nil, fmt.Errorf("read %s: %w", dir, err)
+		return nil, nil, nil, fmt.Errorf("read %s: %w", dir, err)
 	}
-	have := map[string]bool{}
+	// The name on disk may differ in case from the manifest's.
+	have := map[string]string{}
 	for _, e := range entries {
 		if !e.IsDir() {
-			have[strings.ToUpper(e.Name())] = true
+			have[strings.ToUpper(e.Name())] = e.Name()
 		}
 	}
-	var missing []string
 	for _, f := range RuntimeFiles {
-		ok := have[strings.ToUpper(f.Name)]
+		actual, ok := have[strings.ToUpper(f.Name)]
 		present[f.Name] = ok
-		if !ok && f.Required {
-			missing = append(missing, f.Name)
+		if !ok {
+			if f.Required {
+				missing = append(missing, f.Name)
+			}
+			continue
+		}
+		if f.SHA256 == "" {
+			continue
+		}
+		sum, err := fileSHA256(filepath.Join(dir, actual))
+		if err != nil {
+			// Unreadable is not the same as wrong, and saying it is would send
+			// a user replacing a file that may be fine.
+			continue
+		}
+		if !strings.EqualFold(sum, f.SHA256) {
+			wrong = append(wrong, f.Name)
 		}
 	}
-	return present, missing, nil
+	return present, missing, wrong, nil
+}
+
+// fileSHA256 hashes a runtime file. The whole runtime is a few megabytes, so
+// this is cheap enough to do on every readiness check.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
 // VCDName builds the filename an installed disc gets inside __.POPS.

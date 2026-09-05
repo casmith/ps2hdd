@@ -391,7 +391,16 @@ printf 'user supplied' > "$WORK/pops/POPS.ELF"
 printf 'user supplied' > "$WORK/pops/IOPRP252.IMG"
 printf 'unrelated'     > "$WORK/pops/notes.txt"
 ps2hdd setup ps1 --import "$WORK/pops" | tee "$WORK/setup.txt"
-grep -q "Status: READY" "$WORK/setup.txt" || fail "PS1 support did not become ready"
+# The runtime is checked by content, not merely by presence. Placeholder files
+# are not the POPS release, and reporting READY for them is exactly what let a
+# drive whose emulator was the wrong file altogether look correctly set up
+# while every PS1 title failed identically.
+grep -q "Status: NOT READY" "$WORK/setup.txt" \
+  || fail "placeholder runtime files were reported READY: $(cat "$WORK/setup.txt")"
+grep -q "WRONG FILE" "$WORK/setup.txt" \
+  || fail "a file that is not the real runtime was not marked wrong: $(cat "$WORK/setup.txt")"
+grep -q "is not the right file" "$WORK/setup.txt" \
+  || fail "no explanation of what a wrong runtime file means: $(cat "$WORK/setup.txt")"
 grep -q "notes.txt" "$WORK/setup.txt" || fail "an unrelated file was not reported as ignored"
 test ! -f "$DEMO/partitions/common/POPS/notes.txt" \
   || fail "an unrelated file was copied onto the HDD"

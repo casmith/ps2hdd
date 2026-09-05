@@ -111,10 +111,19 @@ back afterwards.`,
 				{ps1.POPSPartition, boolLabel(rep.Readiness.POPSPartition, "OK", "missing")},
 				{ps1.CommonPartition, boolLabel(rep.Readiness.CommonPartition, "OK", "missing")},
 			}
+			wrong := map[string]bool{}
+			for _, n := range rep.Readiness.Wrong {
+				wrong[n] = true
+			}
 			for _, f := range ps1.RuntimeFiles {
 				switch {
 				case !rep.Readiness.RuntimeChecked:
 					pairs = append(pairs, [2]string{f.Name, dim("unknown")})
+				// A file that is present but is not the right file must not
+				// read as OK: that is precisely the state this check exists to
+				// expose, and it looks identical to a working one otherwise.
+				case wrong[f.Name]:
+					pairs = append(pairs, [2]string{f.Name, red("WRONG FILE")})
 				case rep.Readiness.Runtime[f.Name]:
 					pairs = append(pairs, [2]string{f.Name, green("OK")})
 				default:

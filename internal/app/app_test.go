@@ -2,6 +2,8 @@ package app_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"path/filepath"
@@ -378,11 +380,17 @@ func TestPS1ReadinessAndImport(t *testing.T) {
 	// Importing user-supplied runtime files makes it ready, and files that are
 	// not part of the runtime are left alone.
 	importDir := t.TempDir()
+	const placeholder = "user supplied"
 	for _, n := range []string{"POPS.ELF", "IOPRP252.IMG"} {
-		if err := os.WriteFile(filepath.Join(importDir, n), []byte("user supplied"), 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(importDir, n), []byte(placeholder), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	// The runtime is verified by content, and no test can produce Sony's
+	// actual binaries. Point the manifest at the placeholder's hash for the
+	// rest of this test so the ready path is still exercised end to end.
+	sum := sha256.Sum256([]byte(placeholder))
+	defer swapRuntimeHashes(t, hex.EncodeToString(sum[:]))()
 	if err := os.WriteFile(filepath.Join(importDir, "notes.txt"), []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -396,6 +404,9 @@ func TestPS1ReadinessAndImport(t *testing.T) {
 	}
 	if len(rep.Imported) != 2 {
 		t.Errorf("imported %v", rep.Imported)
+	}
+	if len(rep.Readiness.Wrong) != 0 {
+		t.Errorf("files that match their published hash were reported wrong: %v", rep.Readiness.Wrong)
 	}
 	if len(rep.Ignored) != 1 || rep.Ignored[0] != "notes.txt" {
 		t.Errorf("ignored = %v, want just notes.txt", rep.Ignored)
@@ -945,5 +956,73 @@ func TestCatalogWithoutADeviceStillListsSources(t *testing.T) {
 	}
 	if !said {
 		t.Errorf("no warning that there is no device: %v", warnings)
+	}
+}
+
+// swapRuntimeHashes points every hashed runtime file at want for the duration
+// of a test, and returns the restore. It exists because the runtime is checked
+// by content and a test cannot hold Sony's binaries; the alternative is not
+// exercising the ready path at all.
+func swapRuntimeHashes(t *testing.T, want string) func() {
+	t.Helper()
+	saved := make([]string, len(ps1.RuntimeFiles))
+	for i := range ps1.RuntimeFiles {
+		saved[i] = ps1.RuntimeFiles[i].SHA256
+		if ps1.RuntimeFiles[i].SHA256 != "" {
+			ps1.RuntimeFiles[i].SHA256 = want
+		}
+	}
+	return func() {
+		for i := range ps1.RuntimeFiles {
+			ps1.RuntimeFiles[i].SHA256 = saved[i]
+		}
+	}
+}
+
+// A runtime file that is present but is not the file it should be must be
+// reported. This is the failure that cost an entire debugging session: a
+// POPS.ELF that was a different file altogether, with the drive reporting
+// PS1 READY, and every single title black-screening identically because the
+// emulator was not the emulator.
+func TestReadinessRejectsAWrongRuntimeFile(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := newTestServices(t)
+
+	importDir := t.TempDir()
+	for _, n := range []string{"POPS.ELF", "IOPRP252.IMG"} {
+		if err := os.WriteFile(filepath.Join(importDir, n), []byte("not the real thing"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Only POPS.ELF is given the hash it actually has, so IOPRP252.IMG is the
+	// odd one out and the check has to single it out rather than condemn both.
+	sum := sha256.Sum256([]byte("not the real thing"))
+	restore := swapRuntimeHashes(t, hex.EncodeToString(sum[:]))
+	defer restore()
+	for i := range ps1.RuntimeFiles {
+		if ps1.RuntimeFiles[i].Name == "IOPRP252.IMG" {
+			ps1.RuntimeFiles[i].SHA256 = strings.Repeat("00", 32)
+		}
+	}
+
+	rep, err := svc.SetupPS1(ctx, app.SetupPS1Options{ImportDir: importDir})
+	if err != nil {
+		t.Fatalf("SetupPS1: %v", err)
+	}
+	if rep.Readiness.Ready() {
+		t.Error("a drive whose IOPRP252.IMG is the wrong file reported READY")
+	}
+	if len(rep.Readiness.Wrong) != 1 || rep.Readiness.Wrong[0] != "IOPRP252.IMG" {
+		t.Fatalf("wrong = %v, want just IOPRP252.IMG", rep.Readiness.Wrong)
+	}
+	if len(rep.Readiness.Missing) != 0 {
+		t.Errorf("a wrong file was also reported missing: %v", rep.Readiness.Missing)
+	}
+	explain := strings.Join(rep.Readiness.Explain(), "\n")
+	if !strings.Contains(explain, "not the right file") {
+		t.Errorf("the explanation does not say the file is wrong:\n%s", explain)
+	}
+	if !strings.Contains(explain, "every PS1 title fails") && !strings.Contains(explain, "Every PS1 title fails") {
+		t.Errorf("the explanation does not say what the consequence is:\n%s", explain)
 	}
 }
