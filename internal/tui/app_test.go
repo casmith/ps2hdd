@@ -15,6 +15,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/demo"
 	"github.com/casmith/ps2hdd/internal/logging"
+	"github.com/casmith/ps2hdd/internal/titles"
 	"github.com/casmith/ps2hdd/internal/tui/components"
 )
 
@@ -41,6 +42,7 @@ func newTestModel(t *testing.T) *Model {
 	cfg := env.Config(config.Default())
 	cfg.SetPath(filepath.Join(root, "config", "ps2hdd", "config.toml"))
 	svc := app.New(cfg, env.Runner())
+	svc.Titles = titles.NewOffline() // tests never reach the network
 	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 
 	m := NewModel(context.Background(), svc, cfg)

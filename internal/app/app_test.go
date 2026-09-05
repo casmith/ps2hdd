@@ -5,6 +5,8 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -20,6 +22,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
+	"github.com/casmith/ps2hdd/internal/titles"
 )
 
 func TestMain(m *testing.M) {
@@ -576,6 +579,8 @@ func TestMissingToolIsReportedAsASetupGap(t *testing.T) {
 	runner.Missing[external.PFSFuseTool] = true
 
 	svc := app.New(cfg, runner)
+
+	svc.Titles = titles.NewOffline() // tests never reach the network
 	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 	ctx := context.Background()
 
@@ -718,6 +723,7 @@ func TestCreatePOPSPartitionVerifiesTheResult(t *testing.T) {
 		Stdout: "> # (!) Exit code is -1.\n__.POPS: not enough free space.\n",
 	}}
 	svc := app.New(cfg, runner)
+	svc.Titles = titles.NewOffline() // tests never reach the network
 	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 
 	rep, err := svc.CreatePOPSPartition(context.Background(), "8G")
@@ -807,6 +813,7 @@ func newCrossCheckServices(t *testing.T) (*app.Services, *external.FakeRunner) {
 
 	runner := external.NewFakeRunner()
 	svc := app.New(cfg, runner)
+	svc.Titles = titles.NewOffline() // tests never reach the network
 	t.Cleanup(func() { _ = svc.Close(context.Background()) })
 	return svc, runner
 }
@@ -1025,4 +1032,135 @@ func TestReadinessRejectsAWrongRuntimeFile(t *testing.T) {
 	if !strings.Contains(explain, "every PS1 title fails") && !strings.Contains(explain, "Every PS1 title fails") {
 		t.Errorf("the explanation does not say what the consequence is:\n%s", explain)
 	}
+}
+
+// stubTitles is a title lookup that answers from a map and never uses a
+// network.
+type stubTitles struct{ byName map[string]string }
+
+func (s stubTitles) Do(req *http.Request) (*http.Response, error) {
+	for serial, title := range s.byName {
+		if strings.Contains(req.URL.String(), serial) {
+			return &http.Response{StatusCode: 200,
+				Body: io.NopCloser(strings.NewReader("Title=" + title + "\n"))}, nil
+		}
+	}
+	return &http.Response{StatusCode: 404, Body: io.NopCloser(strings.NewReader(""))}, nil
+}
+
+// A rip called "Disc 1" or "hot-shots-golf-u-scus-94188" should not become the
+// name of the game on the console. The serial inside the image should.
+func TestInstallNamesAPS1TitleFromItsSerial(t *testing.T) {
+	svc, env := newTestServices(t)
+	ctx := context.Background()
+	svc.Titles = titles.Open(t.TempDir())
+	svc.Titles.HTTP = stubTitles{byName: map[string]string{
+		"SLUS_005.94": "Metal Gear Solid",
+	}}
+
+	g := ps1SourceGame(t, svc, ctx, env)
+	if _, err := svc.Install(ctx, g, app.InstallOptions{}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+
+	names := popsContents(t, svc, ctx)
+	var found string
+	for _, n := range names {
+		if strings.Contains(n, "Metal Gear Solid") {
+			found = n
+		}
+	}
+	if found == "" {
+		t.Fatalf("no VCD named from the serial's real title; %s holds %v", ps1.POPSPartition, names)
+	}
+	if !strings.HasPrefix(found, "SLUS_005.94.") {
+		t.Errorf("%q does not keep the serial prefix that OPL artwork is keyed on", found)
+	}
+}
+
+// An explicit --title is the user's decision and outranks the database.
+func TestInstallTitleOverrideBeatsTheDatabase(t *testing.T) {
+	svc, env := newTestServices(t)
+	ctx := context.Background()
+	svc.Titles = titles.Open(t.TempDir())
+	svc.Titles.HTTP = stubTitles{byName: map[string]string{
+		"SLUS_005.94": "Metal Gear Solid",
+	}}
+
+	g := ps1SourceGame(t, svc, ctx, env)
+	if _, err := svc.Install(ctx, g, app.InstallOptions{Title: "My Name For It"}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	names := popsContents(t, svc, ctx)
+	for _, n := range names {
+		if strings.Contains(n, "My Name For It") {
+			return
+		}
+	}
+	t.Errorf("--title was ignored; %s holds %v", ps1.POPSPartition, names)
+}
+
+// With the lookup turned off, nothing reaches the network and the filename is
+// used exactly as before.
+func TestInstallFallsBackToTheFilenameTitle(t *testing.T) {
+	svc, env := newTestServices(t)
+	ctx := context.Background()
+	cfg := svc.Config
+	cfg.Install.CanonicalTitles = false
+	svc.Config = cfg
+	svc.Titles = titles.Open(t.TempDir())
+	svc.Titles.HTTP = stubTitles{byName: map[string]string{
+		"SLUS_005.94": "Metal Gear Solid",
+	}}
+
+	g := ps1SourceGame(t, svc, ctx, env)
+	want := g.Title
+	if _, err := svc.Install(ctx, g, app.InstallOptions{}); err != nil {
+		t.Fatalf("Install: %v", err)
+	}
+	for _, n := range popsContents(t, svc, ctx) {
+		if strings.Contains(n, want) {
+			return
+		}
+	}
+	t.Errorf("the filename title %q was not used with canonical titles off", want)
+}
+
+// ps1SourceGame inspects one PS1 disc straight from the source directory.
+//
+// Its file is called "Disc 1.cue", which says nothing, so the title that comes
+// back is the serial -- exactly the case a lookup is for.
+func ps1SourceGame(t *testing.T, svc *app.Services, ctx context.Context, env *demo.Env) model.Game {
+	t.Helper()
+	g, err := svc.InspectSource(ctx, filepath.Join(env.PS1Source(), "Metal Gear Solid", "Disc 1.cue"))
+	if err != nil {
+		t.Fatalf("inspect the PS1 source: %v", err)
+	}
+	if g.Title != "SLUS_005.94" {
+		t.Fatalf("fixture changed: the filename-derived title is %q, so this test no longer shows anything", g.Title)
+	}
+	return g
+}
+
+// popsContents lists the VCDs installed in __.POPS.
+func popsContents(t *testing.T, svc *app.Services, ctx context.Context) []string {
+	t.Helper()
+	m, err := svc.Mounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	if err := m.With(ctx, ps1.POPSPartition, func(mp string) error {
+		entries, err := os.ReadDir(mp)
+		if err != nil {
+			return err
+		}
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("read %s: %v", ps1.POPSPartition, err)
+	}
+	return names
 }

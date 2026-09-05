@@ -258,6 +258,7 @@ func newConfigCommand(env *Env) *cobra.Command {
 					{"sources.ps1", orDash(env.Config.Sources.PS1)},
 					{"install.sync_assets", fmt.Sprintf("%v", env.Config.Install.SyncAssets)},
 					{"install.verify_after_install", fmt.Sprintf("%v", env.Config.Install.VerifyAfterInstall)},
+					{"install.canonical_titles", fmt.Sprintf("%v", env.Config.Install.CanonicalTitles)},
 					{"install.widescreen", fmt.Sprintf("%v", env.Config.Install.Widescreen)},
 					{"install.prefetch", fmt.Sprintf("%d", env.Config.Install.Prefetch)},
 					{"install.scratch_dir", effectiveScratch(env)},
@@ -356,6 +357,8 @@ func setConfigKey(cfg *config.Config, key, value string) error {
 		switch key {
 		case "install.sync_assets":
 			cfg.Install.SyncAssets = b
+		case "install.canonical_titles":
+			cfg.Install.CanonicalTitles = b
 		case "install.verify_after_install":
 			cfg.Install.VerifyAfterInstall = b
 		case "install.widescreen":

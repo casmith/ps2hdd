@@ -41,6 +41,10 @@ type SourcesConfig struct {
 type InstallConfig struct {
 	SyncAssets         bool `toml:"sync_assets" json:"sync_assets"`
 	VerifyAfterInstall bool `toml:"verify_after_install" json:"verify_after_install"`
+	// CanonicalTitles looks a game's real name up from the serial on its disc
+	// rather than taking whatever the file happened to be called. It needs the
+	// network, and falls back to the filename when there is none.
+	CanonicalTitles bool `toml:"canonical_titles" json:"canonical_titles"`
 	// Widescreen turns on POPStarter's GTE widescreen hack for every PS1
 	// title installed. Off by default, and deliberately: it corrects 3D
 	// geometry but leaves HUDs, fonts, menus and 2D backgrounds stretched, and
@@ -129,7 +133,7 @@ type TUIConfig struct {
 // permanently incomplete, so the defaults are chosen to be satisfiable.
 func Default() Config {
 	return Config{
-		Install: InstallConfig{SyncAssets: true, VerifyAfterInstall: true, Prefetch: 2},
+		Install: InstallConfig{SyncAssets: true, VerifyAfterInstall: true, Prefetch: 2, CanonicalTitles: true},
 		Assets: AssetsConfig{
 			// opl-art is the default because it is the only source that can
 			// satisfy the slots enabled here. A default configuration that

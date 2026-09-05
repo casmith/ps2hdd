@@ -13,8 +13,10 @@ import (
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
+	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
+	"github.com/casmith/ps2hdd/internal/titles"
 )
 
 // Services is the object the CLI and TUI both drive.
@@ -42,6 +44,10 @@ type Services struct {
 	target   *drive.Target
 	mounts   *drive.MountManager
 	srcCache map[string]*catalog.Cache
+	// Titles resolves serials to the names games are actually called. It is
+	// opened on first use; a caller that sets it -- a test, or anything that
+	// must not reach the network -- keeps what it set.
+	Titles *titles.Lookup
 	// hddLock serialises raw-HDD mutations. hdl_dump makes no promise about
 	// concurrent writers to one disk, so ps2hdd allows exactly one at a time.
 	hddLock sync.Mutex
@@ -540,4 +546,42 @@ func (s *Services) SourceDirs() []SourceDirStatus {
 		out = append(out, st)
 	}
 	return out
+}
+
+// titleLookup returns the shared serial-to-title lookup, opening it once.
+func (s *Services) titleLookup() *titles.Lookup {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.Titles == nil {
+		dir, err := config.CacheDir()
+		if err != nil {
+			// No cache directory is not a reason to fail an install; it only
+			// means every lookup goes to the network.
+			s.Titles = titles.Open("")
+		} else {
+			s.Titles = titles.Open(dir)
+		}
+	}
+	return s.Titles
+}
+
+// CanonicalTitle resolves a game's real name from the serial on its disc.
+//
+// It reports false whenever the answer would be a guess: the feature is turned
+// off, the serial is unknown to the database, or there is no network. The
+// caller keeps the filename-derived title in that case, which is what ps2hdd
+// has always used.
+func (s *Services) CanonicalTitle(ctx context.Context, g model.Game) (string, bool) {
+	if !s.Config.Install.CanonicalTitles || g.GameID == "" {
+		return "", false
+	}
+	l := s.titleLookup()
+	title, ok := l.Title(ctx, g.Platform, g.GameID)
+	if !ok {
+		return "", false
+	}
+	if err := l.Save(); err != nil {
+		logging.ContextLogger(ctx).Warn("could not save the title cache", "err", err)
+	}
+	return title, true
 }

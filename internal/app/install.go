@@ -230,8 +230,18 @@ func gameDiscs(g model.Game) []ps1.Disc {
 // an earlier read established: a disk can be unplugged, or a by-id link
 // repointed, between listing the library and modifying it.
 func (s *Services) Install(ctx context.Context, g model.Game, opts InstallOptions) (InstallReport, error) {
-	if opts.Title != "" {
+	// An explicit --title always wins. Failing that, the serial on the disc is
+	// a better source for the name than the filename is: a rip may be called
+	// "hot-shots-golf-u-scus-94188" or "SLUS_00067" or "Disc 1", and none of
+	// those is what the game is called. The name reached here is the one that
+	// goes into the VCD's filename, the launcher's, and OPL's menu.
+	switch {
+	case opts.Title != "":
 		g.Title = opts.Title
+	default:
+		if t, ok := s.CanonicalTitle(ctx, g); ok {
+			g.Title = t
+		}
 	}
 	// Space abandoned by a run that was killed is reclaimed here, at the point
 	// it is about to be needed, rather than on a timer.

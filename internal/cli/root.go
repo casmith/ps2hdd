@@ -21,6 +21,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/demo"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/logging"
+	"github.com/casmith/ps2hdd/internal/titles"
 )
 
 // Version is set at build time with -ldflags.
@@ -156,6 +157,11 @@ func setupEnv(env *Env, g *globalFlags) error {
 		cfg = e.Config(cfg)
 		env.Config = cfg
 		env.Svc = app.New(cfg, e.Runner())
+		// The demo is a closed world: it fakes the disk and the external
+		// tools, and it must not reach a real title database either. Doing so
+		// would make its output depend on the network and on what someone
+		// else's repository says today.
+		env.Svc.Titles = titles.NewOffline()
 	} else {
 		env.Config = cfg
 		env.Svc = app.NewFromConfig(cfg)
