@@ -201,7 +201,7 @@ func PadOffset(c Cue, binSize int64) (int64, bool) {
 // video patch, and ps2hdd deliberately does neither, since silently altering a
 // game's code is not something an install tool should do without being asked.
 func Convert(cuePath, outPath string, opts ConvertOptions) error {
-	c, err := ParseCueFile(cuePath)
+	c, err := LoadSheet(cuePath)
 	if err != nil {
 		return err
 	}

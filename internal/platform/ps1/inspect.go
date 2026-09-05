@@ -72,8 +72,11 @@ func Inspect(path string) (Disc, error) {
 	binPath := path
 
 	var cue *Cue
-	if ext == ".cue" {
-		c, err := ParseCueFile(path)
+	// A .ccd carries the same information a cuesheet does, so both arrive here
+	// as a Cue and everything after this point is identical. A .nrg is refused
+	// by LoadSheet, by name.
+	if ext == ".cue" || ext == ccdExt || ext == nrgExt {
+		c, err := LoadSheet(path)
 		if err != nil {
 			return d, err
 		}
