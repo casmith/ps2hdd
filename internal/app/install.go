@@ -590,6 +590,12 @@ func (s *Services) installPS1(ctx context.Context, g model.Game, opts InstallOpt
 				"`ps2hdd setup ps1 --launchers`; the game itself does not need reinstalling.",
 			ps1.POPStarterELF, ps1.CommonPartition, ps1.POPSDir))
 	}
+	if total > ps1.MaxDiscsInDiscsFile {
+		rep.Warnings = append(rep.Warnings, fmt.Sprintf(
+			"%s has %d discs, and DISCS.TXT describes at most %d. Every disc is installed and "+
+				"each will boot from its own launcher, but the in-game disc-swap menu will not "+
+				"work for this title.", g.Title, total, ps1.MaxDiscsInDiscsFile))
+	}
 	if !ps1.BootNameFitsOPL(launcherELF) {
 		rep.Warnings = append(rep.Warnings, fmt.Sprintf(
 			"%q is longer than the 64 characters OPL allows for a boot filename, so the entry "+

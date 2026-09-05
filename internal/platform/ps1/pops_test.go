@@ -3,6 +3,7 @@ package ps1_test
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -242,12 +243,26 @@ func TestDiscsFile(t *testing.T) {
 	}
 }
 
-// VMCDIR.TXT names the VCD whose memory card the disc shares, one line. A
-// documented way to get this wrong is to put the title in it instead.
+// VMCDIR.TXT names the support DIRECTORY whose memory card the disc shares --
+// one line, no extension. Writing the VCD's filename there instead looks
+// almost right and fails silently: POPStarter cannot find a folder of that
+// name, gives the disc a card of its own, and the save made on disc 1 is
+// missing after the swap.
 func TestVMCDirContents(t *testing.T) {
 	first := ps1.VCDName("SLUS_005.94", "Metal Gear Solid", 1, 2)
-	if got, want := ps1.VMCDirContents(first), first+"\n"; got != want {
+	got := ps1.VMCDirContents(first)
+	if want := ps1.GameDirName(first) + "\n"; got != want {
 		t.Errorf("VMCDIR.TXT = %q, want %q", got, want)
+	}
+	if strings.Contains(got, ps1.VCDExt) {
+		t.Errorf("VMCDIR.TXT = %q: it names a directory, so it must not carry the .VCD extension", got)
+	}
+	// The documented limits: at most 103 bytes, and no path separators.
+	if len(got) > 103 {
+		t.Errorf("VMCDIR.TXT is %d bytes, over POPStarter's 103", len(got))
+	}
+	if strings.ContainsAny(got, `/\:`) {
+		t.Errorf("VMCDIR.TXT = %q contains a path separator, which POPStarter rejects", got)
 	}
 }
 
@@ -325,5 +340,50 @@ func TestCheckRuntimeDoesNotHashThePOPStarterLauncher(t *testing.T) {
 		if f.Name == "POPSTARTER.ELF" && f.SHA256 != "" {
 			t.Errorf("POPSTARTER.ELF has a fixed expected hash %q, but it differs between releases", f.SHA256)
 		}
+	}
+}
+
+// A VCD name must fit the buffer DISCS.TXT paths are read into, or disc
+// swapping breaks without saying so.
+func TestVCDNameFitsTheDiscsFileBuffer(t *testing.T) {
+	long := strings.Repeat("The Longest Title Anyone Ever Shipped ", 5)
+	for disc := 1; disc <= 4; disc++ {
+		n := ps1.VCDName("SLUS_005.94", long, disc, 4)
+		if len(n) > 73 {
+			t.Errorf("disc %d name is %d characters: %q", disc, len(n), n)
+		}
+		// The disc suffix is what tells the discs apart and must survive
+		// truncation; a title cut back to a shared prefix would install four
+		// files with one name.
+		if !strings.Contains(n, fmt.Sprintf("_CD%d.VCD", disc)) {
+			t.Errorf("disc %d lost its suffix: %q", disc, n)
+		}
+	}
+}
+
+// Every line of DISCS.TXT is a VCD filename, extension included: POPStarter
+// opens them, unlike VMCDIR.TXT which names a folder.
+func TestDiscsFileListsFilenames(t *testing.T) {
+	var names []string
+	for i := 1; i <= 3; i++ {
+		names = append(names, ps1.VCDName("SCUS_941.6"+string(rune('2'+i)), "Final Fantasy VII", i, 3))
+	}
+	body := ps1.DiscsFileContents(names)
+	lines := strings.Split(strings.TrimRight(body, "\n"), "\n")
+	if len(lines) != 3 {
+		t.Fatalf("DISCS.TXT has %d lines, want one per disc: %q", len(lines), body)
+	}
+	for i, l := range lines {
+		if !strings.HasSuffix(l, ps1.VCDExt) {
+			t.Errorf("line %d is %q; every line names a VCD file", i+1, l)
+		}
+		if len(l) > 73 {
+			t.Errorf("line %d is %d characters, over the path buffer POPStarter reads it into", i+1, len(l))
+		}
+	}
+	// Line order is disc order: the swap combo picks a line number, not a
+	// disc label.
+	if !strings.Contains(lines[0], "_CD1") || !strings.Contains(lines[2], "_CD3") {
+		t.Errorf("DISCS.TXT is not in disc order: %q", body)
 	}
 }

@@ -288,8 +288,14 @@ test -f "$CD2/DISCS.TXT" || fail "disc 2 has no DISCS.TXT"
 grep -q "_CD2.VCD" "$CD1/DISCS.TXT" || fail "DISCS.TXT does not list both discs"
 # VMCDIR.TXT points the later discs at disc 1's card, or a save made on disc 1
 # is gone after the swap. Disc 1 owns the card and must not have one.
+#
+# It names disc 1's DIRECTORY, with no extension. The .VCD form looks almost
+# right and fails silently: POPStarter finds no folder of that name, gives the
+# disc a card of its own, and the save is missing at the disc change.
 test -f "$CD2/VMCDIR.TXT" || fail "disc 2 has no VMCDIR.TXT"
-grep -q "_CD1.VCD" "$CD2/VMCDIR.TXT" || fail "VMCDIR.TXT does not name disc 1"
+grep -q "_CD1" "$CD2/VMCDIR.TXT" || fail "VMCDIR.TXT does not name disc 1"
+grep -q "\.VCD" "$CD2/VMCDIR.TXT" \
+  && fail "VMCDIR.TXT names a file, not disc 1's directory: $(cat "$CD2/VMCDIR.TXT")" || true
 test -f "$CD1/VMCDIR.TXT" && fail "disc 1 was pointed at another card" || true
 test -e "$DEMO/partitions/pops/SLUS_005.94.Metal Gear Solid" \
   && fail "support files were written into __.POPS, where POPStarter does not look" || true
