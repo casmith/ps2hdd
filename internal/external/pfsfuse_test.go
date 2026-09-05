@@ -12,7 +12,7 @@ func TestMountArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"--partition=+OPL", "/dev/disk/by-id/ata-X", "/run/ps2hdd/opl"}
+	want := []string{"-s", "--partition=+OPL", "/dev/disk/by-id/ata-X", "/run/ps2hdd/opl"}
 	if !equal(args, want) {
 		t.Errorf("args = %v, want %v", args, want)
 	}
@@ -21,7 +21,7 @@ func TestMountArgs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !equal(allow, []string{"--partition=__.POPS", "-o", "allow_other", "/dev/x", "/mnt"}) {
+	if !equal(allow, []string{"-s", "--partition=__.POPS", "-o", "allow_other", "/dev/x", "/mnt"}) {
 		t.Errorf("allow_other args = %v", allow)
 	}
 
@@ -29,6 +29,49 @@ func TestMountArgs(t *testing.T) {
 		if _, err := MountArgs(bad[0], bad[1], bad[2], false); err == nil {
 			t.Errorf("MountArgs%v accepted an incomplete request", bad)
 		}
+	}
+}
+
+// pfsfuse must never be mounted multi-threaded. The drivers underneath it hold
+// one global mount state and one shared buffer pool, and FUSE's default is to
+// serve requests in parallel; the result is reads that succeed and return the
+// wrong bytes.
+//
+// This is asserted on its own, and not only through the exact argument vectors
+// above, because it is the one argument whose absence is silent. A wrong
+// partition or a missing device fails loudly on the next command; losing -s
+// corrupts data and reports success.
+func TestMountIsAlwaysSingleThreaded(t *testing.T) {
+	for _, tc := range []struct {
+		name                          string
+		device, partition, mountpoint string
+		allowOther                    bool
+	}{
+		{"plain", "/dev/x", "+OPL", "/mnt", false},
+		{"allow_other", "/dev/x", "__.POPS", "/mnt", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args, err := MountArgs(tc.device, tc.partition, tc.mountpoint, tc.allowOther)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var found bool
+			for _, a := range args {
+				if a == "-s" {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("mount args %v do not force single-threaded FUSE; "+
+					"reads through this mount can return the wrong bytes without any error", args)
+			}
+			// It has to precede the mountpoint: pfsfuse passes what follows to
+			// fuse_main positionally, and an option after the operands is
+			// taken for one of them.
+			if args[len(args)-1] != tc.mountpoint || args[len(args)-2] != tc.device {
+				t.Errorf("device and mountpoint are not the last two operands: %v", args)
+			}
+		})
 	}
 }
 
