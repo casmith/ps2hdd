@@ -144,11 +144,11 @@ func (r InstalledReader) Readiness(ctx context.Context) (ps1.Readiness, error) {
 	// than reported as missing; saying "missing" would send the user chasing a
 	// file that may well be there.
 	mountErr := r.Mounts.With(ctx, ps1.CommonPartition, func(mp string) error {
-		present, missing, err := ps1.CheckRuntime(mp)
+		present, missing, wrong, err := ps1.CheckRuntime(mp)
 		if err != nil {
 			return err
 		}
-		out.Runtime, out.Missing, out.RuntimeChecked = present, missing, true
+		out.Runtime, out.Missing, out.Wrong, out.RuntimeChecked = present, missing, wrong, true
 		return nil
 	})
 	if mountErr != nil {

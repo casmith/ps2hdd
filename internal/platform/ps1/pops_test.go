@@ -1,6 +1,8 @@
 package ps1_test
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,7 +131,7 @@ func TestScanPOPSGroupsMultiDisc(t *testing.T) {
 
 func TestCheckRuntimeMissing(t *testing.T) {
 	dir := t.TempDir() // no POPS directory at all
-	present, missing, err := ps1.CheckRuntime(dir)
+	present, missing, _, err := ps1.CheckRuntime(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,17 +153,28 @@ func TestCheckRuntimeComplete(t *testing.T) {
 	}
 	// PFS filenames are conventionally upper case but users copy in whatever
 	// case they have, so matching must ignore it.
-	for _, f := range []string{"POPS.ELF", "ioprp252.img", "PopStarter.elf"} {
+	// A complete runtime is all five files: the two Sony binaries, the
+	// launcher, and the two packages that ship beside POPS.
+	for _, f := range []string{"POPS.ELF", "ioprp252.img", "PopStarter.elf", "POPS.PAK", "pops_iox.pak"} {
 		if err := os.WriteFile(filepath.Join(pops, f), []byte("x"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	present, missing, err := ps1.CheckRuntime(dir)
+	// The placeholder bytes are not the real files, so the manifest is pointed
+	// at their hash: this test is about presence and case matching, and the
+	// content check has its own tests.
+	restore := swapRuntimeHashesTo(t, sha256Hex("x"))
+	defer restore()
+
+	present, missing, wrong, err := ps1.CheckRuntime(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(missing) != 0 {
 		t.Errorf("missing = %v, want none", missing)
+	}
+	if len(wrong) != 0 {
+		t.Errorf("wrong = %v, want none", wrong)
 	}
 	if !present["IOPRP252.IMG"] {
 		t.Error("case-insensitive match failed")
@@ -235,5 +248,82 @@ func TestVMCDirContents(t *testing.T) {
 	first := ps1.VCDName("SLUS_005.94", "Metal Gear Solid", 1, 2)
 	if got, want := ps1.VMCDirContents(first), first+"\n"; got != want {
 		t.Errorf("VMCDIR.TXT = %q, want %q", got, want)
+	}
+}
+
+func sha256Hex(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return hex.EncodeToString(sum[:])
+}
+
+// swapRuntimeHashesTo points every hashed runtime file at want, and returns the
+// restore. A test cannot hold Sony's binaries, so exercising anything past the
+// content check means substituting the expectation.
+func swapRuntimeHashesTo(t *testing.T, want string) func() {
+	t.Helper()
+	saved := make([]string, len(ps1.RuntimeFiles))
+	for i := range ps1.RuntimeFiles {
+		saved[i] = ps1.RuntimeFiles[i].SHA256
+		if ps1.RuntimeFiles[i].SHA256 != "" {
+			ps1.RuntimeFiles[i].SHA256 = want
+		}
+	}
+	return func() {
+		for i := range ps1.RuntimeFiles {
+			ps1.RuntimeFiles[i].SHA256 = saved[i]
+		}
+	}
+}
+
+// A file whose contents are not the published ones is reported as wrong, not
+// as missing, and not as fine.
+func TestCheckRuntimeRejectsWrongContents(t *testing.T) {
+	dir := t.TempDir()
+	pops := filepath.Join(dir, "POPS")
+	if err := os.MkdirAll(pops, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"POPS.ELF", "IOPRP252.IMG", "POPSTARTER.ELF", "POPS.PAK", "POPS_IOX.PAK"} {
+		if err := os.WriteFile(filepath.Join(pops, f), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	restore := swapRuntimeHashesTo(t, sha256Hex("x"))
+	defer restore()
+	// Now make one of them the odd one out.
+	for i := range ps1.RuntimeFiles {
+		if ps1.RuntimeFiles[i].Name == "POPS.ELF" {
+			ps1.RuntimeFiles[i].SHA256 = sha256Hex("the real POPS")
+		}
+	}
+
+	present, missing, wrong, err := ps1.CheckRuntime(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !present["POPS.ELF"] {
+		t.Error("a file that exists was reported absent")
+	}
+	if len(missing) != 0 {
+		t.Errorf("missing = %v: a wrong file is present, not missing", missing)
+	}
+	if len(wrong) != 1 || wrong[0] != "POPS.ELF" {
+		t.Fatalf("wrong = %v, want just POPS.ELF", wrong)
+	}
+
+	r := ps1.Readiness{POPSPartition: true, CommonPartition: true, Runtime: present,
+		RuntimeChecked: true, Wrong: wrong}
+	if r.Ready() {
+		t.Error("READY with the wrong POPS.ELF; every title would fail identically")
+	}
+}
+
+// POPSTARTER.ELF changes with every POPStarter revision, so there is no single
+// right content for it and it must never be called wrong.
+func TestCheckRuntimeDoesNotHashThePOPStarterLauncher(t *testing.T) {
+	for _, f := range ps1.RuntimeFiles {
+		if f.Name == "POPSTARTER.ELF" && f.SHA256 != "" {
+			t.Errorf("POPSTARTER.ELF has a fixed expected hash %q, but it differs between releases", f.SHA256)
+		}
 	}
 }
