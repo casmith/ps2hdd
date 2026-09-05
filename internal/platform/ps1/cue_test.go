@@ -3,6 +3,7 @@ package ps1_test
 import (
 	"errors"
 	"fmt"
+	"github.com/casmith/ps2hdd/internal/iso9660/isosynth"
 	"os"
 	"path/filepath"
 	"strings"
@@ -402,5 +403,98 @@ func TestGapSectorsMatchesTheConversion(t *testing.T) {
 	}
 	if got := cdrwin.GapSectors(); got != 150 {
 		t.Errorf("a CDRWIN sheet reported %d gap sectors, want 150", got)
+	}
+}
+
+// Cuesheets are routinely written on Windows, where the case of a filename is
+// not information. This one is from a 2003 rip that works everywhere except a
+// case-sensitive filesystem:
+//
+//	FILE "FINAL FANTASY VII DISC 1.BIN" BINARY
+//
+// beside a file called "Final Fantasy VII Disc 1.bin".
+func TestParseCueFileMatchesTheFilenameCaseInsensitively(t *testing.T) {
+	dir := t.TempDir()
+	img, err := isosynth.BuildMode2352(isosynth.Image{
+		VolumeID: "SCUS_941.63",
+		CDXA:     true,
+		Files:    map[string][]byte{"SYSTEM.CNF": isosynth.PS1SystemCNF("SCUS_941.63")},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const real = "Final Fantasy VII Disc 1.bin"
+	if err := os.WriteFile(filepath.Join(dir, real), img, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cue := filepath.Join(dir, "Final Fantasy VII Disc 1.cue")
+	if err := os.WriteFile(cue, []byte(
+		"FILE \"FINAL FANTASY VII DISC 1.BIN\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	c, err := ps1.ParseCueFile(cue)
+	if err != nil {
+		t.Fatalf("ParseCueFile: %v", err)
+	}
+	if filepath.Base(c.BinPath) != real {
+		t.Errorf("BinPath = %q, want the file that is actually there (%q)", c.BinPath, real)
+	}
+	if len(c.FilePaths) != 1 || filepath.Base(c.FilePaths[0]) != real {
+		t.Errorf("FilePaths = %v, want [%q]", c.FilePaths, real)
+	}
+	// BinName keeps what the sheet said: it is what an error message should
+	// quote, and what the archive's own listing will agree with.
+	if c.BinName != "FINAL FANTASY VII DISC 1.BIN" {
+		t.Errorf("BinName = %q, want the name as written in the sheet", c.BinName)
+	}
+	if err := c.Validate(); err != nil {
+		t.Errorf("a rip whose only fault is the case of a filename was rejected: %v", err)
+	}
+}
+
+// An exact match is always preferred, so a directory holding two files that
+// differ only in case still resolves to the one the sheet names.
+func TestParseCueFilePrefersTheExactFilename(t *testing.T) {
+	dir := t.TempDir()
+	sectors := make([]byte, 2352*4)
+	for _, n := range []string{"game.bin", "GAME.BIN"} {
+		if err := os.WriteFile(filepath.Join(dir, n), sectors, 0o600); err != nil {
+			t.Skipf("this filesystem cannot hold two names differing only in case: %v", err)
+		}
+	}
+	cue := filepath.Join(dir, "game.cue")
+	if err := os.WriteFile(cue, []byte(
+		"FILE \"GAME.BIN\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := ps1.ParseCueFile(cue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(c.BinPath) != "GAME.BIN" {
+		t.Errorf("BinPath = %q, want the exactly named GAME.BIN", c.BinPath)
+	}
+}
+
+// A file that is genuinely absent must still be reported, quoting the name the
+// sheet used rather than something invented while looking for it.
+func TestParseCueFileStillReportsAMissingTrack(t *testing.T) {
+	dir := t.TempDir()
+	cue := filepath.Join(dir, "game.cue")
+	if err := os.WriteFile(cue, []byte(
+		"FILE \"absent.bin\" BINARY\n  TRACK 01 MODE2/2352\n    INDEX 01 00:00:00\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := ps1.ParseCueFile(cue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = c.Validate()
+	if err == nil {
+		t.Fatal("a cuesheet naming a file that does not exist was accepted")
+	}
+	if !strings.Contains(err.Error(), "absent.bin") {
+		t.Errorf("the error does not name the missing file: %v", err)
 	}
 }
