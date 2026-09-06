@@ -73,8 +73,18 @@ const (
 	// a copy, so it is taken from the runtime the user installed.
 	POPStarterELF = "POPSTARTER.ELF"
 
-	// maxVCDNameLen is POPStarter's filename limit.
-	maxVCDNameLen = 89
+	// maxVCDNameLen is the longest VCD filename POPStarter reliably handles.
+	//
+	// Its wiki says 89, but the buffer DISCS.TXT paths are read into caps a
+	// name at around 73, and exceeding that breaks disc swapping rather than
+	// failing loudly. The smaller number is used for every title: a name is
+	// only an identifier, and a shorter one costs nothing next to a
+	// multi-disc game that cannot change discs.
+	maxVCDNameLen = 73
+
+	// MaxDiscsInDiscsFile is how many discs DISCS.TXT can describe. POPStarter
+	// reads four lines and the feature breaks beyond that.
+	MaxDiscsInDiscsFile = 4
 )
 
 // RuntimeFile is a component of the POPS runtime.
@@ -337,10 +347,16 @@ func GameDirName(vcdName string) string {
 	return strings.TrimSuffix(vcdName, filepath.Ext(vcdName))
 }
 
-// VMCDirContents renders a VMCDIR.TXT body: the VCD filename whose memory card
-// this disc should share.
+// VMCDirContents renders a VMCDIR.TXT body: the name of the support directory
+// whose memory card this disc should share.
+//
+// It is a directory name, not a filename, and carries no extension --
+// "SLUS_005.94.Metal Gear Solid_CD1", never "...CD1.VCD". POPStarter looks for
+// a folder of that name beside this one under __common/POPS; given a name it
+// cannot find, it silently falls back to giving this disc a card of its own,
+// and a save made on disc 1 is then invisible on disc 2.
 func VMCDirContents(firstDiscVCD string) string {
-	return firstDiscVCD + "\n"
+	return GameDirName(firstDiscVCD) + "\n"
 }
 
 // DiscsFileContents renders the DISCS.TXT body listing a title's VCDs in disc

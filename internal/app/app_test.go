@@ -206,8 +206,8 @@ func TestInstallMultiDiscPS1(t *testing.T) {
 			if !strings.Contains(string(body), "_CD1.VCD") || !strings.Contains(string(body), "_CD2.VCD") {
 				t.Errorf("%s/DISCS.TXT does not list both discs: %q", dir, body)
 			}
-			// VMCDIR.TXT goes in the later discs only, naming disc 1's VCD, so
-			// that a save made on disc 1 is there after the swap.
+			// VMCDIR.TXT goes in the later discs only, naming disc 1's support
+			// directory, so that a save made on disc 1 is there after the swap.
 			vmc := filepath.Join(mp, "POPS", dir, "VMCDIR.TXT")
 			got, err := os.ReadFile(vmc)
 			if i == 0 {
@@ -219,8 +219,13 @@ func TestInstallMultiDiscPS1(t *testing.T) {
 			if err != nil {
 				return err
 			}
-			if !strings.Contains(string(got), "_CD1.VCD") {
-				t.Errorf("%s/VMCDIR.TXT = %q, want disc 1's VCD", dir, got)
+			// A directory name, with no extension. The .VCD form looks right
+			// and silently costs the player their save at the disc change.
+			if strings.Contains(string(got), ".VCD") {
+				t.Errorf("%s/VMCDIR.TXT = %q: it must name disc 1's directory, not its VCD file", dir, got)
+			}
+			if !strings.Contains(string(got), "_CD1") {
+				t.Errorf("%s/VMCDIR.TXT = %q, want disc 1's support directory", dir, got)
 			}
 		}
 		return nil
