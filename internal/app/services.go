@@ -13,6 +13,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/config"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
+	"github.com/casmith/ps2hdd/internal/homebrew"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
@@ -27,6 +28,9 @@ import (
 type Services struct {
 	Config config.Config
 	Runner external.Runner
+	// HTTP fetches homebrew releases. A caller that sets it -- a test, or
+	// anything that must not reach the network -- keeps what it set.
+	HTTP homebrew.Doer
 
 	HDL external.HDLDump
 	PFS external.PFS

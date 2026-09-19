@@ -124,6 +124,7 @@ Raw disk safety
 		newAssetsCommand(env),
 		newDatabaseCommand(env),
 		newSetupCommand(env),
+		newAppsCommand(env),
 		newConfigCommand(env),
 	)
 	return root, env

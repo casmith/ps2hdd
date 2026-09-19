@@ -1,10 +1,12 @@
 package app_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -19,6 +21,7 @@ import (
 	"github.com/casmith/ps2hdd/internal/demo"
 	"github.com/casmith/ps2hdd/internal/drive"
 	"github.com/casmith/ps2hdd/internal/external"
+	"github.com/casmith/ps2hdd/internal/homebrew"
 	"github.com/casmith/ps2hdd/internal/logging"
 	"github.com/casmith/ps2hdd/internal/model"
 	"github.com/casmith/ps2hdd/internal/platform/ps1"
@@ -1168,4 +1171,135 @@ func popsContents(t *testing.T, svc *app.Services, ctx context.Context) []string
 		t.Fatalf("read %s: %v", ps1.POPSPartition, err)
 	}
 	return names
+}
+
+// fakeReleases serves a GitHub release document and then the ELF itself.
+type fakeReleases struct {
+	release string
+	elf     []byte
+}
+
+func (f fakeReleases) Do(req *http.Request) (*http.Response, error) {
+	if strings.HasSuffix(req.URL.Path, "/OPNPS2LD.ELF") {
+		return &http.Response{StatusCode: 200, Body: io.NopCloser(bytes.NewReader(f.elf))}, nil
+	}
+	return &http.Response{StatusCode: 200, Body: io.NopCloser(strings.NewReader(f.release))}, nil
+}
+
+func oplReleaseJSON(size int) string {
+	return fmt.Sprintf(`{"tag_name":"latest","assets":[
+	 {"name":"OPNPS2LD-v1.2.0-Beta-2245-3e3f34e.7z","size":1,"browser_download_url":"https://example.invalid/a.7z"},
+	 {"name":"OPNPS2LD.ELF","size":%d,"browser_download_url":"https://example.invalid/OPNPS2LD.ELF"}]}`, size)
+}
+
+// Installing an app writes an OPL app entry -- a directory with the ELF and a
+// title.cfg naming it -- and records the version, because the ELF carries none.
+func TestUpdateAppInstallsAnAppEntry(t *testing.T) {
+	svc, _ := newTestServices(t)
+	ctx := context.Background()
+	elf := bytes.Repeat([]byte{0x7f}, 4096)
+	svc.HTTP = fakeReleases{release: oplReleaseJSON(len(elf)), elf: elf}
+
+	rep, err := svc.UpdateApp(ctx, "opl", false)
+	if err != nil {
+		t.Fatalf("UpdateApp: %v", err)
+	}
+	if rep.To != "v1.2.0-Beta-2245-3e3f34e" {
+		t.Errorf("installed version = %q", rep.To)
+	}
+
+	m, err := svc.Mounts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.With(ctx, drive.PartitionOPL, func(mp string) error {
+		got, err := os.ReadFile(filepath.Join(mp, "APPS", "opl", "OPNPS2LD.ELF"))
+		if err != nil {
+			return err
+		}
+		if !bytes.Equal(got, elf) {
+			t.Errorf("the installed ELF is not what was downloaded (%d bytes vs %d)", len(got), len(elf))
+		}
+		cfg, err := os.ReadFile(filepath.Join(mp, "APPS", "opl", "title.cfg"))
+		if err != nil {
+			return err
+		}
+		// OPL needs both keys or the entry does not appear at all.
+		title, boot := ps1.ParseTitleConfig(cfg)
+		if title == "" || boot != "OPNPS2LD.ELF" {
+			t.Errorf("title.cfg = %q (title=%q boot=%q)", cfg, title, boot)
+		}
+		if v := homebrew.ReadManifest(mp).Apps["opl"].Version; v != rep.To {
+			t.Errorf("manifest records %q, want %q", v, rep.To)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Installing again is a no-op rather than a re-download.
+	again, err := svc.UpdateApp(ctx, "opl", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !again.Skipped {
+		t.Error("a second update at the same version was not skipped")
+	}
+	if forced, err := svc.UpdateApp(ctx, "opl", true); err != nil || forced.Skipped {
+		t.Errorf("--force did not reinstall: %+v %v", forced, err)
+	}
+}
+
+// A download that does not match the size the release advertises is a truncated
+// transfer. Writing it would leave an app entry that exists and does not run.
+func TestUpdateAppRefusesATruncatedDownload(t *testing.T) {
+	svc, _ := newTestServices(t)
+	elf := bytes.Repeat([]byte{0x7f}, 100)
+	svc.HTTP = fakeReleases{release: oplReleaseJSON(999999), elf: elf}
+
+	_, err := svc.UpdateApp(context.Background(), "opl", false)
+	if err == nil {
+		t.Fatal("a short download was accepted")
+	}
+	if !strings.Contains(err.Error(), "bytes") {
+		t.Errorf("the error does not say what was wrong: %v", err)
+	}
+	m, _ := svc.Mounts(context.Background())
+	_ = m.With(context.Background(), drive.PartitionOPL, func(mp string) error {
+		if _, err := os.Stat(filepath.Join(mp, "APPS", "opl", "OPNPS2LD.ELF")); err == nil {
+			t.Error("a refused download still left an ELF on the drive")
+		}
+		return nil
+	})
+}
+
+// An app nobody has heard of is a typo, and saying so beats a silent success.
+func TestUpdateAppRejectsAnUnknownApp(t *testing.T) {
+	svc, _ := newTestServices(t)
+	if _, err := svc.UpdateApp(context.Background(), "nope", false); err == nil {
+		t.Fatal("an unknown app was accepted")
+	}
+}
+
+// A dry run describes the write without performing it.
+func TestUpdateAppDryRunWritesNothing(t *testing.T) {
+	svc, _ := newTestServices(t)
+	svc.DryRun = true
+	elf := bytes.Repeat([]byte{0x7f}, 64)
+	svc.HTTP = fakeReleases{release: oplReleaseJSON(len(elf)), elf: elf}
+
+	rep, err := svc.UpdateApp(context.Background(), "opl", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !rep.DryRun || len(rep.Files) == 0 {
+		t.Errorf("a dry run should describe the files it would write: %+v", rep)
+	}
+	m, _ := svc.Mounts(context.Background())
+	_ = m.With(context.Background(), drive.PartitionOPL, func(mp string) error {
+		if _, err := os.Stat(filepath.Join(mp, "APPS", "opl")); err == nil {
+			t.Error("a dry run created the app directory")
+		}
+		return nil
+	})
 }
